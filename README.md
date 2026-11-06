@@ -12,6 +12,18 @@ The binaries are `bugnet-edge` (also run as `bugnet-secrets`), `bugnet-ssh`, `bu
 | Path | What it holds |
 | --- | --- |
 | `internal/proxyproto` | Listeners that take only trusted sources opening with a PROXY v2 header |
+| `internal/tlsconf` | One TLS config that picks the certificate and ALPN list by SNI |
+
+## TLS
+
+`internal/tlsconf` picks a certificate and an ALPN list by SNI. An unknown SNI fails the handshake.
+
+- With ACME on, each exact name gets its own certificate from autocert by TLS-ALPN-01, kept in the
+  state directory. The wildcard comes from the `fullchain.pem` and `key.pem` that `bugnet-certs`
+  writes. The edge checks their modification times every minute and loads a new pair without a
+  restart.
+- With ACME off, one static pair serves every name, the wildcard too. Unit tests and the live
+  stack's local mode use it with a self-signed certificate.
 
 ## Prerequisites
 
