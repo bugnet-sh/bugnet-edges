@@ -17,6 +17,15 @@ The binaries are `bugnet-edge` (also run as `bugnet-secrets`), `bugnet-ssh`, `bu
 | `internal/routerclient` | Bearer-token HTTP clients for router-api's Connect services |
 | `internal/metrics` | Counters and gauges in the Prometheus text format, with no client library |
 
+## Listeners
+
+HAProxy opens every connection to a backend with a PROXY v2 header. `internal/proxyproto` takes
+the client's address from it.
+
+- A connection from a source outside the trusted prefixes closes before `Accept` returns it.
+- A trusted connection without a v2 header, or with a v1 header, closes at its first read.
+- Each listener sets `SO_REUSEPORT`, so a new version binds beside the old one during a deploy.
+
 ## TLS
 
 `internal/tlsconf` picks a certificate and an ALPN list by SNI. An unknown SNI fails the handshake.
