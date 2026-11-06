@@ -440,3 +440,37 @@ func TestWildcardKeepsLastGoodPairWhileFilesAreMissing(t *testing.T) {
 	c.Advance(2 * time.Minute)
 	eq(t, servedSerial(t, addr, previewName), 1)
 }
+
+func TestHostsListsExactNamesThenTheWildcard(t *testing.T) {
+	cfg := mustNew(t, acmeOptions(t, &clock{t: day0}, day0.AddDate(0, 0, 60)))
+	exact, wild := Hosts(cfg)
+	eq(t, exact, []string{previewHost, transferHost, hooksHost})
+	eq(t, wild, wildcardName)
+	exact, wild = Hosts(&tls.Config{})
+	eq(t, len(exact), 0)
+	eq(t, wild, "")
+}
+
+func TestIssueAsksAutocertForTheECDSACertificate(t *testing.T) {
+	o := acmeOptions(t, &clock{t: day0}, time.Now().AddDate(0, 0, 60))
+	chain, key := pair(t, 7, time.Now().AddDate(0, 0, 80), transferHost)
+	writeCache(t, o.ACME.StateDir, transferHost, chain, key)
+	cfg := mustNew(t, o)
+	if err := Issue(cfg, transferHost); err != nil {
+		t.Fatalf("a cached certificate asked the CA: %v", err)
+	}
+	if err := Issue(cfg, hooksHost); err == nil {
+		t.Fatal("a name with no certificate and no CA was issued")
+	}
+	if err := Issue(cfg, "unknown.example.test"); err == nil {
+		t.Fatal("a name the config does not serve was issued")
+	}
+	_, listed := DaysLeft(cfg, day0)[hooksHost]
+	eq(t, listed, false)
+}
+
+func TestIssueOnTheStaticPairDoesNothing(t *testing.T) {
+	cfg := mustNew(t, staticOptions(t, day0.AddDate(0, 0, 90)))
+	eq(t, Issue(cfg, transferHost), nil)
+	eq(t, Issue(&tls.Config{}, transferHost) != nil, true)
+}

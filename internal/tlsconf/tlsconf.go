@@ -214,13 +214,58 @@ func (s *served) configFor(hello *tls.ClientHelloInfo) (*tls.Config, error) {
 	return nil, errUnknownName
 }
 
-// DaysLeft reports each served name's days to expiry, without names autocert has not issued yet
-func DaysLeft(c *tls.Config, now time.Time) map[string]int {
+// lookup finds what New built for c, nil for a config New did not return
+func lookup(c *tls.Config) *served {
 	v, ok := registry.Load(weak.Make(c))
 	if !ok {
 		return nil
 	}
-	s := v.(*served)
+	return v.(*served)
+}
+
+// Hosts lists the exact names c serves in the order given, and the wildcard as *.suffix
+func Hosts(c *tls.Config) (exact []string, wildcard string) {
+	s := lookup(c)
+	if s == nil {
+		return nil, ""
+	}
+	if s.suffix != "" {
+		wildcard = "*" + s.suffix
+	}
+	return slices.Clone(s.hosts), wildcard
+}
+
+// errNotServed is Issue's answer for a config New did not return
+var errNotServed = errors.New("tlsconf: the config was not built by New")
+
+// Issue asks autocert for an exact name as a browser would, which issues it when none is cached
+func Issue(c *tls.Config, host string) error {
+	s := lookup(c)
+	switch {
+	case s == nil:
+		return errNotServed
+	case s.exact[normal(host)] == nil:
+		return errUnknownName
+	case s.manager == nil:
+		return nil
+	}
+	_, err := s.manager.GetCertificate(&tls.ClientHelloInfo{
+		ServerName:        normal(host),
+		SupportedProtos:   []string{"h2", "http/1.1"},
+		SignatureSchemes:  []tls.SignatureScheme{tls.ECDSAWithP256AndSHA256},
+		SupportedCurves:   []tls.CurveID{tls.CurveP256},
+		CipherSuites:      []uint16{tls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256},
+		SupportedVersions: []uint16{tls.VersionTLS13, tls.VersionTLS12},
+	})
+	return err
+}
+
+// DaysLeft reports each served name's days to expiry, without names autocert has not issued yet
+func DaysLeft(c *tls.Config, now time.Time) map[string]int {
+	s := lookup(c)
+	if s == nil {
+		return nil
+	}
 	out := map[string]int{}
 	for _, host := range s.hosts {
 		if leaf := s.leaf(host); leaf != nil {
