@@ -1,0 +1,48 @@
+# bugnet-edge's settings, /etc/bugnet/edge.toml (DP 8.8)
+# Secrets come only from the environment, BUGNET_EDGE_TOKEN and BUGNET_HOOK_PATH_SECRET
+
+router_url = "http://127.0.0.1:8080"
+edge_id = ""                          # host-pid when empty
+tls_listen_addr = "127.0.0.1:8443"    # TLS for every edge name, PROXY v2 first
+redirect_listen_addr = ":80"          # 301 to https, empty serves no redirect
+metrics_listen_addr = "127.0.0.1:9101"  # /healthz, /readyz and /metrics
+proxy_protocol_from = ["127.0.0.1/32", "::1/128"]
+drain = "5m"                          # hijacked connections may finish this long on deploy
+max_concurrent_streams = 128          # HTTP/2 streams per connection
+total_bytes_per_second = "40MiB"      # every placement together, both ways, 0 is no cap
+
+[names]                               # required, lowercase host names
+preview_domain = "preview.bugnet.sh"  # previews are <id>.<preview_domain>
+transfer_host = "transfer.bugnet.sh"
+hooks_host = "hooks.bugnet.sh"
+
+[previews]
+resolve_cache = 10000                 # routes kept in memory
+route_ttl = "60s"                     # a cached route is resolved again after this
+token_failures_per_minute = 20        # per client IP, then 429 for 10 minutes, 0 is no limit
+queue_wait = "30s"
+queue_max = 256                       # waiting requests per placement, then 503 at once
+abuse_contact = "abuse@bugnet.sh"     # required, a mail address or an https URL
+boat_requests_per_minute = 5000       # edge-wide toward Boat, 0 = off after the 16.3 test
+
+[transfers]
+chunk = "256KiB"                      # edge to router message size
+idle_timeout = "60s"
+token_failures_per_minute = 20        # per client IP, then 429 for 10 minutes, 0 is no limit
+max_connections_per_ip = 16
+
+[hooks]
+max_body = "64KiB"
+requests_per_minute = 60              # per client IP, 0 is no limit
+
+[usage]
+report_interval = "5s"
+report_bytes = "8MiB"                 # one placement's bytes that send at once, 0 is off
+
+[acme]
+enabled = true                        # false serves every name from the pair in static_dir
+directory = "https://acme-v02.api.letsencrypt.org/directory"
+email = ""
+state_dir = "/var/lib/bugnet-edge"    # autocert, TLS-ALPN-01, every name but the wildcard
+wildcard_dir = "/var/lib/bugnet-certs/preview"   # written by bugnet-certs, read only
+static_dir = ""                       # fullchain.pem and key.pem for every name, ACME off
