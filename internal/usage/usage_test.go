@@ -156,6 +156,22 @@ func TestReporterFlushesAtThreshold(t *testing.T) {
 	})
 }
 
+func TestReporterThresholdZeroIsOff(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		r := newRouter()
+		rep, _, _ := startWith(t, r, 0)
+		rep.Add("p1", 64*mib, 0)
+		time.Sleep(5*time.Second - time.Millisecond)
+		synctest.Wait()
+		reports, _ := r.seen()
+		eq(t, len(reports), 0)
+		time.Sleep(time.Millisecond)
+		synctest.Wait()
+		reports, _ = r.seen()
+		eq(t, reports, [][]usage{{{"p1", 64 * mib, 0}}})
+	})
+}
+
 func TestReporterEveryInterval(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		r := newRouter()

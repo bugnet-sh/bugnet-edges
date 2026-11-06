@@ -107,6 +107,7 @@ when one placement has built up the threshold (8 MiB).
 - An answer to a report sent before the last `SetRemaining` keeps that newer figure.
 - `Drop` forgets a placement's figure. Its unsent bytes still go out, and answers about it change
   nothing until the next `SetRemaining`.
+- A threshold of 0 turns threshold reports off.
 - When `Run` stops, it sends what is left once.
 
 ### Events
