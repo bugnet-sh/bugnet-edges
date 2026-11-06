@@ -141,7 +141,8 @@ Each run:
 1. checks that every variable in `dns_env` is set, naming a missing one and never a value;
 2. renews each certificate in `[[certificates]]` that is missing or due, by DNS-01 through the
    lego provider `dns_provider`. A certificate is due once the CA's ARI window starts, or at two
-   thirds of its life when the CA gives no window;
+   thirds of its life when the CA gives no window. A failed window lookup logs a warning naming
+   the certificate and falls back to two thirds;
 3. writes `fullchain.pem` and `key.pem` by rename, mode 0640, in the group of their directory.
    Give that directory the edge's group and the setgid bit, so the edge can read the files. A
    chain and key that do not match are never written;

@@ -86,6 +86,12 @@ func (l *logs) logger() *slog.Logger {
 // errors lists the error records, each as its decoded attributes
 func (l *logs) errors(t *testing.T) []map[string]any {
 	t.Helper()
+	return l.records(t, "ERROR")
+}
+
+// records lists the records at level, each as its decoded attributes
+func (l *logs) records(t *testing.T, level string) []map[string]any {
+	t.Helper()
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	var out []map[string]any
@@ -97,7 +103,7 @@ func (l *logs) errors(t *testing.T) []map[string]any {
 		if err := json.Unmarshal([]byte(line), &rec); err != nil {
 			t.Fatal(err)
 		}
-		if rec["level"] == "ERROR" {
+		if rec["level"] == level {
 			out = append(out, rec)
 		}
 	}

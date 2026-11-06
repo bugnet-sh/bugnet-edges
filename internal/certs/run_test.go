@@ -23,16 +23,17 @@ const wildcard = "*.preview.example.test"
 
 // fakeIssuer issues self-signed pairs and records what it was asked
 type fakeIssuer struct {
-	t        *testing.T
-	window   *Window
-	fail     error
-	life     time.Duration
-	obtained [][]string
-	replaced []*x509.Certificate
+	t         *testing.T
+	window    *Window
+	windowErr error
+	fail      error
+	life      time.Duration
+	obtained  [][]string
+	replaced  []*x509.Certificate
 }
 
 func (f *fakeIssuer) Window(*x509.Certificate) (*Window, error) {
-	return f.window, nil
+	return f.window, f.windowErr
 }
 
 func (f *fakeIssuer) Obtain(names []string, old *x509.Certificate) ([]byte, []byte, error) {
@@ -108,6 +109,23 @@ func TestCertsRenewsByTheARIWindow(t *testing.T) {
 	eq(t, Run(t.Context(), config(dir), iss, l.logger(), time.Now()), true)
 	iss.window = &Window{Start: time.Now().Add(-time.Minute), End: time.Now().Add(time.Hour)}
 	eq(t, Run(t.Context(), config(dir), iss, l.logger(), time.Now()), true)
+	eq(t, len(iss.obtained), 2)
+}
+
+func TestCertsWindowErrorFallsBackToTwoThirds(t *testing.T) {
+	dir := t.TempDir()
+	iss, l := newFake(t), &logs{}
+	eq(t, Run(t.Context(), config(dir), iss, l.logger(), time.Now()), true)
+	iss.window = &Window{Start: time.Now().Add(-time.Minute)}
+	iss.windowErr = errors.New("acme: renewal info unavailable")
+	eq(t, Run(t.Context(), config(dir), iss, l.logger(), time.Now()), true)
+	eq(t, len(iss.obtained), 1)
+	warns := l.records(t, "WARN")
+	eq(t, len(warns), 1)
+	eq[any](t, warns[0]["names"], wildcard)
+	eq(t, len(l.errors(t)), 0)
+	later := time.Now().Add(61 * 24 * time.Hour)
+	eq(t, Run(t.Context(), config(dir), iss, l.logger(), later), true)
 	eq(t, len(iss.obtained), 2)
 }
 
