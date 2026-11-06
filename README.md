@@ -142,7 +142,10 @@ Each run:
 2. renews each certificate in `[[certificates]]` that is missing or due, by DNS-01 through the
    lego provider `dns_provider`. A certificate is due once the CA's ARI window starts, or at two
    thirds of its life when the CA gives no window. A failed window lookup logs a warning naming
-   the certificate and falls back to two thirds;
+   the certificate and falls back to two thirds. A renewal names the certificate it replaces
+   (ARI). When the CA refuses the new order for that field, as malformed, unauthorized or in
+   conflict, it orders once more without it. A failed validation is never retried in the same
+   run, so one bad run spends one validation;
 3. writes `fullchain.pem` and `key.pem` by rename, mode 0640, in the group of their directory.
    Give that directory the edge's group and the setgid bit, so the edge can read the files. A
    chain and key that do not match are never written;

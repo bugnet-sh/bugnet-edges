@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/go-acme/lego/v4/acme"
 	"github.com/go-acme/lego/v4/acme/api"
 	"github.com/go-acme/lego/v4/certcrypto"
 	"github.com/go-acme/lego/v4/certificate"
@@ -126,7 +127,9 @@ func saveRegistration(dir string, reg *registration.Resource) error {
 }
 
 type legoIssuer struct {
-	client *lego.Client
+	client   *lego.Client
+	newOrder string // the CA's new order URL, which a refused order's problem names
+	log      *slog.Logger
 }
 
 // NewLego is the Issuer on lego, solving DNS-01 through dns_provider with the account it keeps
@@ -172,7 +175,11 @@ func newLego(cfg Config, log *slog.Logger, hc *http.Client) (Issuer, error) {
 	if err := client.Challenge.SetDNS01Provider(provider); err != nil {
 		return nil, fmt.Errorf("certs: %w", err)
 	}
-	return &legoIssuer{client: client}, nil
+	core, err := api.New(lc.HTTPClient, lc.UserAgent, lc.CADirURL, a.reg.URI, a.key)
+	if err != nil {
+		return nil, fmt.Errorf("certs: ACME directory: %w", err)
+	}
+	return &legoIssuer{client: client, newOrder: core.GetDirectory().NewOrderURL, log: log}, nil
 }
 
 func (l *legoIssuer) Window(cert *x509.Certificate) (*Window, error) {
@@ -187,20 +194,50 @@ func (l *legoIssuer) Window(cert *x509.Certificate) (*Window, error) {
 }
 
 func (l *legoIssuer) Obtain(names []string, old *x509.Certificate) ([]byte, []byte, error) {
-	req := certificate.ObtainRequest{Domains: names, Bundle: true}
-	if old != nil {
-		if id, err := certificate.MakeARICertID(old); err == nil {
-			req.ReplacesCertID = id
-		}
+	obtain := func(replaces string) (*certificate.Resource, error) {
+		return l.client.Certificate.Obtain(certificate.ObtainRequest{
+			Domains: names, Bundle: true, ReplacesCertID: replaces,
+		})
 	}
-	res, err := l.client.Certificate.Obtain(req)
-	// A CA that cannot match the old certificate refuses the order, so it goes again without it
-	if err != nil && req.ReplacesCertID != "" {
-		req.ReplacesCertID = ""
-		res, err = l.client.Certificate.Obtain(req)
-	}
+	res, err := obtainReplacing(obtain, old, l.newOrder, l.log.With("names",
+		strings.Join(names, ",")))
 	if err != nil {
 		return nil, nil, err
 	}
 	return res.Certificate, res.PrivateKey, nil
+}
+
+// obtainFunc asks the CA for one certificate, naming by its ARI id the one it replaces
+type obtainFunc func(replaces string) (*certificate.Resource, error)
+
+// obtainReplacing orders as old's replacement, then once without when the CA refuses that order
+func obtainReplacing(
+	obtain obtainFunc, old *x509.Certificate, newOrder string, log *slog.Logger,
+) (*certificate.Resource, error) {
+	var id string
+	if old != nil {
+		id, _ = certificate.MakeARICertID(old)
+	}
+	res, err := obtain(id)
+	if err != nil && id != "" && refusedOrder(err, newOrder) {
+		log.Warn("the CA refused the order as a replacement, ordering again without it",
+			"err", err)
+		res, err = obtain("")
+	}
+	return res, err
+}
+
+const acmeProblem = "urn:ietf:params:acme:error:"
+
+// refusedOrder is the CA refusing the new order request, before any validation ran
+func refusedOrder(err error, newOrder string) bool {
+	var p *acme.ProblemDetails
+	if !errors.As(err, &p) || p.URL != newOrder {
+		return false
+	}
+	switch p.Type {
+	case acmeProblem + "malformed", acmeProblem + "unauthorized", acme.AlreadyReplacedErr:
+		return true
+	}
+	return p.HTTPStatus == http.StatusConflict
 }
