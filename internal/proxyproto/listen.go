@@ -15,10 +15,12 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// headerTimeout bounds the wait for the header, which HAProxy sends at once
-const headerTimeout = 10 * time.Second
+var (
+	// headerTimeout bounds the wait for the header, which HAProxy sends at once
+	headerTimeout = 10 * time.Second
 
-var errVersion = errors.New("proxyproto: only PROXY protocol version 2 is accepted")
+	errVersion = errors.New("proxyproto: only PROXY protocol version 2 is accepted")
+)
 
 // Listen binds addr with SO_REUSEPORT and admits trusted sources that open with a PROXY v2 header
 func Listen(addr string, trusted []netip.Prefix) (net.Listener, error) {

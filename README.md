@@ -23,7 +23,9 @@ HAProxy opens every connection to a backend with a PROXY v2 header. `internal/pr
 the client's address from it.
 
 - A connection from a source outside the trusted prefixes closes before `Accept` returns it.
-- A trusted connection without a v2 header, or with a v1 header, closes at its first read.
+- A trusted connection without a v2 header, or with a v1 header, closes at its first read or
+  write. That holds for `io.Copy` too, so a raw TCP relay cannot use it.
+- A trusted connection whose header does not arrive within 10 s closes the same way.
 - Each listener sets `SO_REUSEPORT`, so a new version binds beside the old one during a deploy.
 
 ## TLS

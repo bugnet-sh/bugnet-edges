@@ -5,6 +5,7 @@ import (
 	"io"
 	"net"
 	"net/netip"
+	"strings"
 	"testing"
 	"time"
 
@@ -75,6 +76,11 @@ func remoteOf(t *testing.T, ln net.Listener, head []byte) string {
 	return c.RemoteAddr().String()
 }
 
+func timedOut(err error) bool {
+	var ne net.Error
+	return errors.As(err, &ne) && ne.Timeout()
+}
+
 // closedByServer reports whether the server ended the client's connection
 func closedByServer(t *testing.T, c net.Conn) bool {
 	t.Helper()
@@ -82,11 +88,7 @@ func closedByServer(t *testing.T, c net.Conn) bool {
 		t.Fatal(err)
 	}
 	_, err := c.Read(make([]byte, 1))
-	var ne net.Error
-	if errors.As(err, &ne) && ne.Timeout() {
-		return false
-	}
-	return err != nil
+	return err != nil && !timedOut(err)
 }
 
 // refused sends head from a trusted source and reports whether the server failed and closed it
@@ -94,13 +96,22 @@ func refused(t *testing.T, ln net.Listener, head []byte) bool {
 	t.Helper()
 	client := dial(t, ln, head)
 	c := accept(t, ln)
+	if err := c.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
 	_, first := c.Read(make([]byte, 1))
 	_, second := c.Read(make([]byte, 1))
+	if timedOut(first) || timedOut(second) {
+		t.Fatalf("the server waited for more data instead of refusing (%v, %v)", first, second)
+	}
 	return first != nil && second != nil && closedByServer(t, client)
 }
 
+// noHeader is a request that opens without a PROXY header
+const noHeader = "GET / HTTP/1.1\r\nHost: a\r\n\r\n"
+
 func closedWithoutHeader(t *testing.T, ln net.Listener) bool {
-	return refused(t, ln, []byte("GET / HTTP/1.1\r\nHost: a\r\n\r\n"))
+	return refused(t, ln, []byte(noHeader))
 }
 
 func TestProxyProtoTrustedOnly(t *testing.T) {
@@ -117,6 +128,57 @@ func TestProxyProtoIPv6Client(t *testing.T) {
 func TestProxyProtoVersionOneRefused(t *testing.T) {
 	ln := mustListen(t, loopback)
 	eq(t, refused(t, ln, header(t, 1, "203.0.113.9:4000")), true)
+}
+
+func TestProxyProtoEveryFailedCallCloses(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		call func(c net.Conn) error
+	}{
+		{"Write", func(c net.Conn) error {
+			_, err := c.Write([]byte("y"))
+			return err
+		}},
+		{"WriteTo", func(c net.Conn) error {
+			_, err := io.Copy(io.Discard, c)
+			return err
+		}},
+		{"ReadFrom", func(c net.Conn) error {
+			_, err := c.(io.ReaderFrom).ReadFrom(strings.NewReader("y"))
+			return err
+		}},
+	} {
+		ln := mustListen(t, loopback)
+		client := dial(t, ln, []byte(noHeader))
+		if err := tc.call(accept(t, ln)); err == nil {
+			t.Fatalf("%s succeeded without a header", tc.name)
+		}
+		if !closedByServer(t, client) {
+			t.Fatalf("%s failed and left the connection open", tc.name)
+		}
+	}
+}
+
+func TestProxyProtoSilentClientClosedAfterTheHeaderWait(t *testing.T) {
+	eq(t, headerTimeout, 10*time.Second)
+	headerTimeout = 200 * time.Millisecond
+	t.Cleanup(func() { headerTimeout = 10 * time.Second })
+	ln := mustListen(t, loopback)
+	client, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+	c := accept(t, ln)
+	read := make(chan error, 1)
+	go func() {
+		_, err := c.Read(make([]byte, 1))
+		read <- err
+	}()
+	if !closedByServer(t, client) {
+		t.Fatal("a silent client stayed open past the header wait")
+	}
+	eq(t, errors.Is(<-read, pp.ErrNoProxyProtocol), true)
 }
 
 func TestProxyProtoUntrustedSourceClosed(t *testing.T) {
