@@ -83,6 +83,7 @@ type Table struct {
 	mu        sync.Mutex
 	leases    map[string]*Lease
 	onVersion func(placement string, version uint64)
+	onState   func(placement string, s State)
 	down      bool
 }
 
@@ -125,6 +126,13 @@ func (t *Table) OnVersion(f func(placement string, version uint64)) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.onVersion = f
+}
+
+// OnState runs f under the table's lock with every state a lease takes, f must not call the table
+func (t *Table) OnState(f func(placement string, s State)) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.onState = f
 }
 
 // Get returns the placement's live lease
@@ -366,6 +374,9 @@ func (t *Table) setLocked(l *Lease, s State) {
 	l.seq++
 	moved := !s.Deadline.Equal(l.state.Deadline) || l.timer == nil
 	l.state = s
+	if t.onState != nil {
+		t.onState(l.placement, s)
+	}
 	if s.Remaining == 0 {
 		t.endLocked(l, ReasonBudget)
 		return

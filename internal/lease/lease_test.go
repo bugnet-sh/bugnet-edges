@@ -481,6 +481,48 @@ func TestLeasePeriodicCheckGetsTenSeconds(t *testing.T) {
 	})
 }
 
+func TestLeaseOnStateSeesEveryStoredState(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		c := newChecker()
+		table := run(t, c)
+		var mu sync.Mutex
+		var got []uint64
+		table.OnState(func(placement string, s State) {
+			mu.Lock()
+			defer mu.Unlock()
+			eq(t, placement, "p1")
+			got = append(got, s.Remaining)
+		})
+		deadline := time.Now().Add(time.Hour)
+		l := table.Put("p1", State{Deadline: deadline, Remaining: 10})
+		table.Put("p1", State{Deadline: deadline, Remaining: 9})
+		table.Move("p1", State{Deadline: deadline, Remaining: 8})
+		table.Move("absent", State{Deadline: deadline, Remaining: 1})
+		answer(t, c, table, CheckOut{States: map[string]State{
+			"p1": {Deadline: deadline, Remaining: 7},
+		}})
+
+		// A stale answer is not handed on
+		hold := make(chan struct{})
+		c.set(func(c *checker) {
+			c.hold = hold
+			c.out = CheckOut{States: map[string]State{"p1": {Deadline: deadline, Remaining: 5}}}
+		})
+		table.CheckNow()
+		synctest.Wait()
+		table.Move("p1", State{Deadline: deadline, Remaining: 6})
+		c.set(func(c *checker) { c.hold = nil })
+		close(hold)
+		synctest.Wait()
+
+		table.Move("p1", State{Deadline: deadline})
+		eq(t, l.Reason(), ReasonBudget)
+		mu.Lock()
+		defer mu.Unlock()
+		eq(t, got, []uint64{10, 9, 8, 7, 6, 0})
+	})
+}
+
 func TestLeaseMoveKeepsTheVersionWhenZero(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		table := run(t, newChecker())
