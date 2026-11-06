@@ -11,7 +11,16 @@ The binaries are `bugnet-edge` (also run as `bugnet-secrets`), `bugnet-ssh`, `bu
 
 | Path | What it holds |
 | --- | --- |
+| `cmd/bugnet-edge` | The HTTP edge, and with `--role secrets` the secrets route |
+| `cmd/bugnet-certs` | Renews the preview wildcards by DNS-01 and checks every served certificate |
+| `internal/edge` | Both roles' settings, listeners, host routing, HSTS and drain |
+| `internal/pages` | The edge's own HTML pages and the transfer route's JSON errors |
+| `internal/certs` | `bugnet-certs`' settings, renewal, writing by rename and the expiry alert |
+| `internal/certmetric` | `edge_cert_days_left` and `edge_cert_issued` for any TLS config |
+| `example` | Each settings file at its defaults, with the production names |
 | `internal/proxyproto` | Listeners that take only trusted sources opening with a PROXY v2 header |
+| `internal/reuseport` | Plain listeners with `SO_REUSEPORT` |
+| `internal/hostname` | The router's rule for a host name in the settings |
 | `internal/tlsconf` | One TLS config that picks the certificate and ALPN list by SNI |
 | `internal/settings` | Strict TOML settings files, byte sizes and durations |
 | `internal/routerclient` | Bearer-token HTTP clients for router-api's Connect services |
@@ -46,6 +55,105 @@ and so does a client below TLS 1.2.
   stack's local mode use it with a self-signed certificate.
 - An exact name or the wildcard suffix with an empty label, `*`, `:`, `/` or a space is refused at
   start. Write the suffix as `preview.bugnet.sh`, not `.preview.bugnet.sh` or `*.preview.bugnet.sh`.
+
+## bugnet-edge
+
+`bugnet-edge -config FILE [--role edge|secrets]` reads its settings from FILE and its secrets
+from the environment. On SIGTERM or SIGINT it drains and exits. A second signal kills it at once.
+
+| Role | Settings | Secrets | Ports |
+| --- | --- | --- | --- |
+| `edge` | `example/edge.toml` | `BUGNET_EDGE_TOKEN`, `BUGNET_HOOK_PATH_SECRET` | 8443, 80, 9101 |
+| `secrets` | `example/secrets-route.toml` | `BUGNET_SECRETS_TOKEN` | 8445, 9104 |
+
+`edge` is the default role.
+
+`.env.example` lists every secret with an empty value.
+
+### Listeners
+
+| Listener | Serves |
+| --- | --- |
+| `tls_listen_addr` | TLS for the role's names, behind HAProxy, PROXY v2 first |
+| `redirect_listen_addr` | Edge only. `301` to the same URL on `https://`. Empty turns it off |
+| `metrics_listen_addr` | `/healthz`, `/readyz` (503 while draining) and `/metrics` |
+
+Every listener sets `SO_REUSEPORT`, so a new version binds beside the old one during a deploy.
+The redirect answers only host names with a dot, never an IP address, and carries no HSTS, since
+browsers ignore HSTS over plain HTTP.
+
+### Hosts
+
+The edge routes by the `Host` header. Anything else gets the 404 page.
+
+| Host | Paths | Handler |
+| --- | --- | --- |
+| `<id>.<preview_domain>` | Everything | Previews. `<id>` is 16 characters of `a-z` and `2-7` |
+| `<preview_domain>` | `/` only | The landing page with the abuse contact |
+| `<transfer_host>` | `/<token>` and `/<token>/<name>` | Transfers |
+| `<hooks_host>` | `POST /hooks/<provider>/<secret>` | Hooks. `<provider>` is 1 to 16 of `a-z0-9` |
+
+- A route without a handler yet serves the 404 page. Later tasks plug in previews, transfers and
+  hooks through `edge.Deps`.
+- A request whose `Host` belongs to another route than its TLS name gets 421, so the browser
+  opens its own connection. That keeps transfers on HTTP/1.1 and within their per-address
+  connection limit. Previews may share a connection, since one wildcard covers them all.
+- The secrets role serves only `host`.
+
+### Responses
+
+- Every TLS answer carries `Strict-Transport-Security: max-age=31536000`. Any other value a
+  handler or an upstream sets is replaced.
+- Server settings: `ReadHeaderTimeout` 10 s (the TLS handshake too), `IdleTimeout` 2 min, no read
+  or write timeout, `MaxHeaderBytes` 64 KiB on the edge and `max_header_bytes` on the secrets
+  route, HTTP/2 `max_concurrent_streams` (128). Extended CONNECT stays off, so WebSockets
+  always arrive over HTTP/1.1.
+- `internal/pages` writes DP 8.6's pages. They are small static HTML with `Cache-Control:
+  no-store`, `Referrer-Policy: no-referrer`, `X-Content-Type-Options: nosniff` and a CSP of
+  `default-src 'none'`. They never name a provider. Transfer errors are JSON,
+  `{"error": "<code>", "message": "..."}`.
+
+### Drain
+
+On a stop signal the process answers 503 on `/readyz`, stops accepting, and lets open requests
+finish. Connections a handler hijacked, such as WebSockets, may stay open up to `drain` (5
+minutes on the edge, 1 minute on the secrets route). Then everything left is closed. With
+nothing open, the process exits at once.
+
+### Certificates
+
+At start the edge asks autocert once, in the background, for every exact name. That issues a
+missing certificate and starts autocert's renewal timer. Two gauges on `/metrics` show the
+state of each name:
+
+| Metric | Value |
+| --- | --- |
+| `edge_cert_days_left{name}` | Whole days to expiry, for the wildcard and each issued name |
+| `edge_cert_issued{name}` | 1 once the name has a certificate, 0 once its request at start failed |
+
+## bugnet-certs
+
+`bugnet-certs -config FILE` runs from a systemd timer twice a day and exits. Its settings are
+`example/certs.toml`. Its environment holds only the DNS provider's variables.
+
+Each run:
+
+1. checks that every variable in `dns_env` is set, naming a missing one and never a value;
+2. renews each certificate in `[[certificates]]` that is missing or due, by DNS-01 through the
+   lego provider `dns_provider`. A certificate is due once the CA's ARI window starts, or at two
+   thirds of its life when the CA gives no window;
+3. writes `fullchain.pem` and `key.pem` by rename, mode 0640, in the group of their directory.
+   Give that directory the edge's group and the setgid bit, so the edge can read the files. A
+   chain and key that do not match are never written;
+4. reads `edge_cert_days_left` and `edge_cert_issued` from each address in `cert_metrics`.
+
+It exits 1, with an error log naming the certificate, when a renewal fails, a certificate has
+fewer than `alert_days` (14) days left, a name was never issued, or a metrics address does not
+answer after 3 tries. So `systemctl --failed` shows it. Otherwise it exits 0.
+
+The ACME account key and registration live under `state_dir`, one directory per ACME directory
+URL, so runs never register a new account and staging never mixes with production. Switching
+`dns_provider` to any lego provider, with its variables in `dns_env`, changes no code.
 
 ## Calling the router
 
@@ -154,8 +262,9 @@ deadline. Requests, transfers, connections and tunnels run under its children.
 
 ## Settings
 
-Each binary reads one TOML file through `internal/settings`. Loading fails, naming the line and
-the key, when:
+Each binary reads one TOML file through `internal/settings`. `example/` holds each file at its
+defaults. Host names have no default, so each deployment sets them. Loading fails, naming the
+line and the key, when:
 
 - a key names no setting, or differs from one only in case (`Drain` for `drain`);
 - a key or table is set twice;
@@ -180,6 +289,7 @@ Secrets never go in these files. They come from the environment.
   until it is published.
 - `go.work` at the workspace root lists this module. Outside that workspace, or before it lists
   this module, set `GOWORK=off` on every `go`, `make` and `golangci-lint` command.
+- `bugnet-certs` links every lego DNS provider, so its first build takes a few minutes.
 
 The edges never reach Postgres or Valkey, so the tests need neither.
 
