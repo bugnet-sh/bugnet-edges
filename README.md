@@ -122,6 +122,8 @@ An `events.Watcher` keeps one `Watch*Events` stream open.
 - A `Resync` event, or a reconnect that had no cursor to resume from, asks for a lease check.
 - It reports the stream down at once, and back once the stream has stayed open a second or
   delivered a message.
+- `down` runs outside the watcher's lock, so it may call `Cursor`. It can run alongside `on`,
+  from the timer that marks a silent stream back.
 - Reconnects back off from 250 ms to 10 s, a quarter either way, and start over once a stream
   was up.
 

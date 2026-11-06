@@ -310,3 +310,27 @@ func TestWatcherStopsWithItsContext(t *testing.T) {
 		stop()
 	})
 }
+
+func TestWatcherDownMayCallBackIntoTheWatcher(t *testing.T) {
+	r := newRouter()
+	r.fail = 1
+	called := make(chan string, 4)
+	var w *Watcher
+	w = NewWatcher(r.open, func(*routerv1.EdgeEvent) {}, func() {}, func(bool) {
+		called <- w.Cursor()
+	})
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		w.Run(ctx)
+	}()
+	select {
+	case got := <-called:
+		eq(t, got, "")
+	case <-time.After(5 * time.Second):
+		t.Fatal("down never returned from reading the cursor")
+	}
+	cancel()
+	<-done
+}

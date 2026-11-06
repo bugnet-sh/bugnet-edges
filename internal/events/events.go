@@ -32,7 +32,12 @@ type Watcher struct {
 	open   Open
 	on     func(*routerv1.EdgeEvent)
 	resync func()
-	down   func(bool)
+	// down can run alongside on, from the timer that marks a silent stream up
+	down func(bool)
+
+	// told serializes calls to down, and reported is the state down last heard
+	told     sync.Mutex
+	reported bool
 
 	mu     sync.Mutex
 	cursor string
@@ -137,26 +142,42 @@ func (w *Watcher) receive(s Stream) bool {
 
 func (w *Watcher) markUp(n uint64) {
 	w.mu.Lock()
-	defer w.mu.Unlock()
 	if n != w.stream || w.up {
+		w.mu.Unlock()
 		return
 	}
 	w.up = true
-	if w.isDown {
-		w.isDown = false
-		w.down(false)
+	changed := w.isDown
+	w.isDown = false
+	w.mu.Unlock()
+	if changed {
+		w.report()
 	}
 }
 
 func (w *Watcher) setDown() {
 	w.mu.Lock()
-	defer w.mu.Unlock()
 	if w.cursor == "" {
 		w.gap = true
 	}
-	if !w.isDown {
-		w.isDown = true
-		w.down(true)
+	changed := !w.isDown
+	w.isDown = true
+	w.mu.Unlock()
+	if changed {
+		w.report()
+	}
+}
+
+// report calls down outside mu with the latest state, when it differs from the one last reported
+func (w *Watcher) report() {
+	w.told.Lock()
+	defer w.told.Unlock()
+	w.mu.Lock()
+	d := w.isDown
+	w.mu.Unlock()
+	if d != w.reported {
+		w.reported = d
+		w.down(d)
 	}
 }
 
