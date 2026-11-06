@@ -264,3 +264,19 @@ func (f *failAfter) Write(p []byte) (int, error) {
 	f.left = 0
 	return n, f.err
 }
+
+// short takes at most n bytes of each write and reports no error
+type short struct{ n int }
+
+func (s short) Write(p []byte) (int, error) {
+	return min(len(p), s.n), nil
+}
+
+func TestWriterShortWriteIsAnError(t *testing.T) {
+	l := New(0).Lane("a")
+	var counted int
+	n, err := l.Writer(short{n: 10}, true, func(c int) { counted += c }).Write(make([]byte, 100))
+	eq(t, err, io.ErrShortWrite)
+	eq(t, n, 10)
+	eq(t, counted, 10)
+}
