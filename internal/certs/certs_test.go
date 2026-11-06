@@ -2,6 +2,7 @@ package certs
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -64,6 +65,28 @@ func TestCertsWriteByRename(t *testing.T) {
 	got, _ = os.ReadFile(filepath.Join(dir, "key.pem"))
 	eq(t, bytes.Equal(got, key), true)
 	entries, _ = os.ReadDir(dir)
+	eq(t, len(entries), 2)
+}
+
+func TestCertsWriteNamesTheSetgidBitWhenTheGroupIsRefused(t *testing.T) {
+	dir := t.TempDir()
+	oldChain, oldKey := pemPair(t, day0, day0.AddDate(0, 0, 90), wildcard)
+	if err := Write(dir, oldChain, oldKey); err != nil {
+		t.Fatal(err)
+	}
+	chown = func(f *os.File, _ int) error {
+		return &os.PathError{Op: "fchown", Path: f.Name(), Err: syscall.EPERM}
+	}
+	t.Cleanup(func() { chown = fileChown })
+	chain, key := pemPair(t, day0, day0.AddDate(0, 0, 90), wildcard)
+	err := Write(dir, chain, key)
+	if err == nil || !strings.Contains(err.Error(), "setgid") ||
+		!errors.Is(err, syscall.EPERM) {
+		t.Fatalf("got %v", err)
+	}
+	got, _ := os.ReadFile(filepath.Join(dir, "fullchain.pem"))
+	eq(t, bytes.Equal(got, oldChain), true)
+	entries, _ := os.ReadDir(dir)
 	eq(t, len(entries), 2)
 }
 

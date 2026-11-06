@@ -150,7 +150,9 @@ Each run:
    conflict, it orders once more without it. A failed validation is never retried in the same
    run, so one bad run spends one validation;
 3. writes `fullchain.pem` and `key.pem` by rename, mode 0640, in the group of their directory.
-   Give that directory the edge's group and the setgid bit, so the edge can read the files. A
+   Give that directory the edge's group and the setgid bit, so the edge can read the files, as
+   `install -d -o bugnet-certs -g bugnet-edge -m 2750 DIR` does. Without the bit, a user outside
+   that group cannot hand the files to it, and the run fails with an error naming the bit. A
    chain and key that do not match are never written;
 4. reads `edge_cert_days_left` and `edge_cert_issued` from each address in `cert_metrics`.
 

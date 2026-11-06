@@ -198,6 +198,13 @@ func Write(dir string, chain, key []byte) error {
 	return nil
 }
 
+// chown gives f the group gid, leaving its owner
+var chown = fileChown
+
+func fileChown(f *os.File, gid int) error {
+	return f.Chown(-1, gid)
+}
+
 // temp writes body to a new file beside name, so the edge, in dir's group, can read it once renamed
 func temp(dir, name string, body []byte, gid int) (string, error) {
 	f, err := os.CreateTemp(dir, "."+name+".*")
@@ -205,7 +212,14 @@ func temp(dir, name string, body []byte, gid int) (string, error) {
 		return "", fmt.Errorf("certs: %w", err)
 	}
 	path := f.Name()
-	err = errors.Join(f.Chmod(0o640), f.Chown(-1, gid))
+	err = f.Chmod(0o640)
+	if err == nil {
+		err = chown(f, gid)
+	}
+	if errors.Is(err, syscall.EPERM) {
+		err = fmt.Errorf("cannot give it the directory's group, so give the directory the "+
+			"setgid bit (mode 2750) or add this user to that group: %w", err)
+	}
 	if err == nil {
 		_, err = f.Write(body)
 	}
