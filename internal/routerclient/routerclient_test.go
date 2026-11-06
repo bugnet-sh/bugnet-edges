@@ -215,11 +215,14 @@ func TestProtocolsByScheme(t *testing.T) {
 	eq(t, p, "{UnencryptedHTTP2}")
 	eq(t, tr.DisableKeepAlives, false)
 	eq(t, tr.HTTP2.SendPingTimeout > 0 && tr.HTTP2.PingTimeout > 0, true)
-	_, p = protocols(New("https://router.internal:8443", token))
+	eq(t, tr.Proxy == nil, true)
+	tr, p = protocols(New("https://router.internal:8443", token))
 	eq(t, p, "{HTTP1,HTTP2}")
+	eq(t, tr.Proxy == nil, true)
 	for _, base := range []string{"http://127.0.0.1:8080", "https://router.internal:8443"} {
 		tr, p = protocols(PerCall(base, token))
 		eq(t, p, "{HTTP1}")
 		eq(t, tr.DisableKeepAlives, true)
+		eq(t, tr.Proxy == nil, true)
 	}
 }
