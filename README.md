@@ -65,8 +65,10 @@ Errors never quote a value. A line that is not valid TOML is named by its line a
 
 | Type | Written as | Range |
 | --- | --- | --- |
-| `settings.Bytes` | Bytes, `KiB`, `MiB` or `GiB`, such as `"65536"` or `"64KiB"` | 0 to 1 TiB |
+| `settings.Bytes` | Bytes, `KiB`, `MiB` or `GiB`, such as `65536` or `"64KiB"` | 0 to 1 TiB |
 | `settings.Duration` | Go's form, such as `"30s"`, `"5m"` or `"1h30m"` | 0 or more |
+
+A size in plain bytes may be bare or quoted, so `65536` and `"65536"` are the same.
 
 Secrets never go in these files. They come from the environment.
 

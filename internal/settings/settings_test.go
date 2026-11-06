@@ -18,6 +18,7 @@ type sample struct {
 	RouterURL string         `toml:"router_url"`
 	Drain     Duration       `toml:"drain"`
 	Total     Bytes          `toml:"total_bytes_per_second"`
+	Window    Bytes          `toml:"window"`
 	Streams   int            `toml:"max_concurrent_streams"`
 	Small     int8           `toml:"small"`
 	Count     uint32         `toml:"count"`
@@ -72,6 +73,7 @@ router_url = "http://127.0.0.1:8080"
 edge_id = "e1"
 drain = "5m"
 total_bytes_per_second = "40MiB"
+window = 65536
 max_concurrent_streams = 128
 small = -8
 count = 7
@@ -102,6 +104,7 @@ host = "b"
 	eq(t, s.EdgeID, "e1")
 	eq(t, time.Duration(s.Drain), 5*time.Minute)
 	eq(t, s.Total, Bytes(40<<20))
+	eq(t, s.Window, Bytes(64<<10))
 	eq(t, s.Streams, 128)
 	eq(t, s.Small, int8(-8))
 	eq(t, s.Count, uint32(7))
@@ -195,6 +198,10 @@ func TestSettingsErrorsNameKeyAndLine(t *testing.T) {
 		{
 			"total_bytes_per_second = \"2GB\"\n",
 			"line 1: total_bytes_per_second takes a size such as 64KiB or 2GiB",
+		},
+		{
+			"window = -1\n",
+			"line 1: window takes a size such as 64KiB or 2GiB",
 		},
 		{
 			"[hooks]\nmax_body = \"64 KiB\"\n",
