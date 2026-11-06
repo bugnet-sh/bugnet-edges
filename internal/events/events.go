@@ -44,8 +44,7 @@ type Watcher struct {
 	gap bool
 }
 
-// NewWatcher calls on for each event, resync when leases need a check, down when the stream
-// goes down (true) or comes back (false)
+// NewWatcher calls on per event, resync for a lease check and down as the stream drops or returns
 func NewWatcher(
 	open Open, on func(*routerv1.EdgeEvent), resync func(), down func(bool),
 ) *Watcher {
