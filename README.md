@@ -14,6 +14,7 @@ The binaries are `bugnet-edge` (also run as `bugnet-secrets`), `bugnet-ssh`, `bu
 | `internal/proxyproto` | Listeners that take only trusted sources opening with a PROXY v2 header |
 | `internal/tlsconf` | One TLS config that picks the certificate and ALPN list by SNI |
 | `internal/settings` | Strict TOML settings files, byte sizes and durations |
+| `internal/routerclient` | Bearer-token HTTP clients for router-api's Connect services |
 
 ## TLS
 
@@ -25,6 +26,16 @@ The binaries are `bugnet-edge` (also run as `bugnet-secrets`), `bugnet-ssh`, `bu
   restart.
 - With ACME off, one static pair serves every name, the wildcard too. Unit tests and the live
   stack's local mode use it with a self-signed certificate.
+
+## Calling the router
+
+`internal/routerclient` gives two `*http.Client`s for the Connect clients from `bugnet-proto`. Both
+send the caller's token only to the router URL and never follow a redirect.
+
+| Client | Protocol | Used for |
+| --- | --- | --- |
+| `New` | h2c to an `http://` router, h2 or HTTP/1.1 to an `https://` one | Every call but transfers |
+| `PerCall` | HTTP/1.1, one connection per call | Transfer streams, so a stalled one stalls no other |
 
 ## Settings
 
