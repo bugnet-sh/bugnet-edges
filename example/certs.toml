@@ -1,0 +1,14 @@
+# bugnet-certs' settings, /etc/bugnet/certs.toml (DP 8.1 and 15.4)
+# Its environment, /etc/bugnet/certs.env, holds only the DNS provider's variables in dns_env
+
+directory = "https://acme-v02.api.letsencrypt.org/directory"
+email = ""
+state_dir = "/var/lib/bugnet-certs/acme"   # the ACME account, one per directory, kept across runs
+dns_provider = "cloudflare"                # any lego DNS provider name
+dns_env = ["CF_DNS_API_TOKEN"]             # the variables that provider reads, checked at start
+alert_days = 14                            # a name with fewer days left fails the run
+cert_metrics = ["127.0.0.1:9101", "127.0.0.1:9103", "127.0.0.1:9104"]   # edge_cert_* readers
+
+[[certificates]]                           # one table per certificate, each in its own dir
+names = ["*.preview.bugnet.sh"]
+dir = "/var/lib/bugnet-certs/preview"      # fullchain.pem and key.pem, 0640, read by the edge
