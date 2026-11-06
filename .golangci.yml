@@ -12,6 +12,12 @@ linters:
     lll:
       line-length: 100
       tab-width: 4
+  exclusions:
+    rules:
+      # Methods that implement bugnet-proto's generated interfaces keep their Ssh names
+      - linters:
+          - revive
+        text: "var-naming: method \\w*Ssh\\w* should be"
 
 formatters:
   enable:
