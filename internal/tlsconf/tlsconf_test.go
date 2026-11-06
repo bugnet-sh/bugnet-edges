@@ -12,6 +12,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -135,11 +136,21 @@ func serve(t *testing.T, cfg *tls.Config) string {
 // handshake connects to addr with the given SNI and ALPN offer
 func handshake(t *testing.T, addr, sni string, alpn ...string) (tls.ConnectionState, error) {
 	t.Helper()
+	return handshakeUpTo(t, tls.VersionTLS13, addr, sni, alpn...)
+}
+
+// handshakeUpTo is handshake from a client that offers TLS 1.0 up to top
+func handshakeUpTo(
+	t *testing.T, top uint16, addr, sni string, alpn ...string,
+) (tls.ConnectionState, error) {
+	t.Helper()
 	d := &net.Dialer{Timeout: 5 * time.Second}
 	c, err := tls.DialWithDialer(d, "tcp", addr, &tls.Config{
 		ServerName:         sni,
 		NextProtos:         alpn,
 		InsecureSkipVerify: true,
+		MinVersion:         tls.VersionTLS10,
+		MaxVersion:         top,
 	})
 	if err != nil {
 		return tls.ConnectionState{}, err
@@ -240,6 +251,32 @@ func TestTLSALPNPerName(t *testing.T) {
 	eq(t, err != nil, true)
 	_, err = handshake(t, addr, transferHost, acme.ALPNProto)
 	eq(t, err != nil, true)
+}
+
+func TestTLSBelowOneTwoFails(t *testing.T) {
+	static := mustNew(t, staticOptions(t, day0.AddDate(0, 0, 90)))
+	eq(t, static.MinVersion, uint16(tls.VersionTLS12))
+	o := acmeOptions(t, &clock{t: day0}, time.Now().AddDate(0, 0, 60))
+	chain, key := pair(t, 9, time.Now().AddDate(0, 0, 1), transferHost)
+	writeCache(t, o.ACME.StateDir, transferHost+"+token", chain, key)
+	staticAddr, acmeAddr := serve(t, static), serve(t, mustNew(t, o))
+	for _, tc := range []struct {
+		addr, sni string
+		alpn      []string
+	}{
+		{staticAddr, transferHost, plain},
+		{staticAddr, previewName, both},
+		{acmeAddr, previewName, both},
+		{acmeAddr, transferHost, []string{acme.ALPNProto}},
+	} {
+		_, err := handshakeUpTo(t, tls.VersionTLS11, tc.addr, tc.sni, tc.alpn...)
+		if err == nil || !strings.Contains(err.Error(), "protocol version") {
+			t.Fatalf("%s %v over TLS 1.1 gave %v", tc.sni, tc.alpn, err)
+		}
+		if _, err := handshakeUpTo(t, tls.VersionTLS12, tc.addr, tc.sni, tc.alpn...); err != nil {
+			t.Fatalf("%s %v over TLS 1.2: %v", tc.sni, tc.alpn, err)
+		}
+	}
 }
 
 func TestStaticPairServesEveryName(t *testing.T) {

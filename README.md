@@ -30,7 +30,8 @@ the client's address from it.
 
 ## TLS
 
-`internal/tlsconf` picks a certificate and an ALPN list by SNI. An unknown SNI fails the handshake.
+`internal/tlsconf` picks a certificate and an ALPN list by SNI. An unknown SNI fails the handshake,
+and so does a client below TLS 1.2.
 
 - With ACME on, each exact name gets its own certificate from autocert by TLS-ALPN-01, kept in the
   state directory. The wildcard comes from the `fullchain.pem` and `key.pem` that `bugnet-certs`
