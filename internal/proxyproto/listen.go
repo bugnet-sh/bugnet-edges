@@ -20,8 +20,7 @@ const headerTimeout = 10 * time.Second
 
 var errVersion = errors.New("proxyproto: only PROXY protocol version 2 is accepted")
 
-// Listen listens on addr with SO_REUSEPORT and hands out only connections from trusted sources
-// that open with a PROXY v2 header, whose RemoteAddr is then the client's address
+// Listen binds addr with SO_REUSEPORT and admits trusted sources that open with a PROXY v2 header
 func Listen(addr string, trusted []netip.Prefix) (net.Listener, error) {
 	for _, p := range trusted {
 		if !p.IsValid() {
