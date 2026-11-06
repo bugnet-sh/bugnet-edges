@@ -132,8 +132,9 @@ deadline. Requests, transfers, connections and tunnels run under its children.
 - Checks run every 60 s, and every 30 s while the event stream is down. `EdgeCheck` sends the
   held previews with `CheckEdgeLeases`. `EgressCheck` reads each secrets version from
   `CheckEgressLeases`.
-- An answer to a check sent before the lease last changed is not applied to it, so a late answer
-  never undoes an extension.
+- Each check gets 10 s, so a hung one never holds up the next.
+- A late answer, to a check sent before the lease last changed, does not overwrite the newer state.
+  So it never undoes an extension. Its ends and revocations still apply, since they only cut.
 - `Apply` acts on one event: `PlacementEnded`, `DeadlineMoved`, `PreviewRevoked`, the binary's
   own `BudgetSpent` kind and `Resync`.
 - `lease.Reason(ctx)` gives the reason a lease or child context ended with.

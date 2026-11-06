@@ -17,8 +17,10 @@ type checker struct {
 	start time.Time
 	ins   []CheckIn
 	at    []time.Duration
-	out   CheckOut
-	err   error
+	// returned holds when each check returned
+	returned []time.Duration
+	out      CheckOut
+	err      error
 	// hold, when set, keeps each check waiting until it is closed or the check times out
 	hold chan struct{}
 }
@@ -33,6 +35,11 @@ func (c *checker) check(ctx context.Context, in CheckIn) (CheckOut, error) {
 	c.at = append(c.at, time.Since(c.start))
 	hold := c.hold
 	c.mu.Unlock()
+	defer func() {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		c.returned = append(c.returned, time.Since(c.start))
+	}()
 	if hold != nil {
 		select {
 		case <-hold:
@@ -62,6 +69,12 @@ func (c *checker) calls() ([]CheckIn, []time.Duration) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return append([]CheckIn(nil), c.ins...), append([]time.Duration(nil), c.at...)
+}
+
+func (c *checker) ends() []time.Duration {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]time.Duration(nil), c.returned...)
 }
 
 func (c *checker) last(t *testing.T) CheckIn {
@@ -416,6 +429,55 @@ func TestLeaseStaleCheckAnswerIsSkipped(t *testing.T) {
 		synctest.Wait()
 		eq(t, ended(l.Context()), false)
 		eq(t, l.State(), State{Deadline: later, Remaining: gib})
+	})
+}
+
+func TestLeaseStaleCheckAnswerStillEndsAndRevokes(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		c := newChecker()
+		hold := make(chan struct{})
+		c.hold = hold
+		table := run(t, c)
+		deadline := time.Now().Add(time.Hour)
+		p1 := table.Put("p1", State{Deadline: deadline, Remaining: gib})
+		p2 := table.Put("p2", State{Deadline: deadline, Remaining: gib})
+		preview, _ := p1.Preview(HeldPreview{ID: "a", Generation: 1})
+		c.out = CheckOut{States: live(deadline, "p1"), Revoked: []string{"a"}}
+		table.CheckNow()
+		synctest.Wait()
+
+		later := deadline.Add(time.Hour)
+		table.Move("p1", State{Deadline: later, Remaining: 5})
+		table.Put("p2", State{Deadline: later, Remaining: 5})
+		c.set(func(c *checker) { c.hold = nil })
+		close(hold)
+		synctest.Wait()
+		eq(t, Reason(preview), ReasonRevoked)
+		eq(t, p2.Reason(), ReasonEnded)
+		eq(t, ended(p1.Context()), false)
+		eq(t, p1.State(), State{Deadline: later, Remaining: 5})
+	})
+}
+
+func TestLeasePeriodicCheckGetsTenSeconds(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		c := newChecker()
+		c.hold = make(chan struct{})
+		table := run(t, c)
+		l := table.Put("p1", State{Deadline: time.Now().Add(time.Hour), Remaining: gib})
+		time.Sleep(70*time.Second - time.Millisecond)
+		synctest.Wait()
+		eq(t, c.ends(), []time.Duration(nil))
+		time.Sleep(time.Millisecond)
+		synctest.Wait()
+		eq(t, c.ends(), []time.Duration{70 * time.Second})
+		eq(t, ended(l.Context()), false)
+
+		// A hung check leaves the next one on time
+		time.Sleep(50 * time.Second)
+		synctest.Wait()
+		_, at := c.calls()
+		eq(t, at, []time.Duration{60 * time.Second, 120 * time.Second})
 	})
 }
 
