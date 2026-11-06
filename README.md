@@ -11,6 +11,7 @@ The binaries are `bugnet-edge` (also run as `bugnet-secrets`), `bugnet-ssh`, `bu
 
 | Path | What it holds |
 | --- | --- |
+| `internal/proxyproto` | Listeners that take only trusted sources opening with a PROXY v2 header |
 
 ## Prerequisites
 
