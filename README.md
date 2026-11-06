@@ -102,7 +102,11 @@ when one placement has built up the threshold (8 MiB).
   `OnAnswer` with zero at once, even while the router is down.
 - A failed report keeps its bytes for the next one. While the router is down, reports go once an
   interval, not at every threshold.
-- `SetRemaining` sets the bytes left from a resolve, a lease check or an event.
+- `SetRemaining` sets the bytes left from a resolve, a lease check or an event. The lease table's
+  `OnState` gives it each one.
+- An answer to a report sent before the last `SetRemaining` keeps that newer figure.
+- `Drop` forgets a placement's figure. Its unsent bytes still go out, and answers about it change
+  nothing until the next `SetRemaining`.
 - When `Run` stops, it sends what is left once.
 
 ### Events

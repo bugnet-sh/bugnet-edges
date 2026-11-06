@@ -42,6 +42,10 @@ type entry struct {
 	known     bool
 	remaining uint64
 	pace      uint64
+	// set counts SetRemaining and Drop calls, so an answer to an older report keeps their figure
+	set uint64
+	// dropped keeps answers from bringing back a figure until the next SetRemaining
+	dropped bool
 }
 
 // NewReporter reports every interval and once a placement's unsent bytes reach threshold
@@ -100,6 +104,8 @@ func (r *Reporter) SetRemaining(placement string, remaining uint64) {
 	e := r.entry(placement)
 	e.known = true
 	e.remaining = remaining
+	e.set++
+	e.dropped = false
 }
 
 // Drop forgets the placement's figures once its unsent bytes are reported
@@ -108,6 +114,8 @@ func (r *Reporter) Drop(placement string) {
 	defer r.mu.Unlock()
 	if e, ok := r.entries[placement]; ok {
 		e.known = false
+		e.set++
+		e.dropped = true
 		r.tidy(placement, e)
 	}
 }
@@ -154,6 +162,7 @@ type answered struct {
 func (r *Reporter) report(ctx context.Context) {
 	r.mu.Lock()
 	var batch []*routerv1.PlacementUsage
+	set := map[string]uint64{}
 	for id, e := range r.entries {
 		if e.in+e.out == 0 {
 			continue
@@ -161,6 +170,7 @@ func (r *Reporter) report(ctx context.Context) {
 		batch = append(batch, &routerv1.PlacementUsage{
 			PlacementId: id, BytesIn: uint64(e.in), BytesOut: uint64(e.out),
 		})
+		set[id] = e.set
 		e.in, e.out = 0, 0
 	}
 	r.mu.Unlock()
@@ -176,7 +186,12 @@ func (r *Reporter) report(ctx context.Context) {
 	r.mu.Lock()
 	if err != nil {
 		for _, u := range batch {
-			e := r.entry(u.GetPlacementId())
+			e, ok := r.entries[u.GetPlacementId()]
+			if !ok {
+				// Only Drop deletes an entry while its bytes are out
+				e = &entry{dropped: true}
+				r.entries[u.GetPlacementId()] = e
+			}
 			e.in += int64(u.GetBytesIn())
 			e.out += int64(u.GetBytesOut())
 		}
@@ -192,7 +207,7 @@ func (r *Reporter) report(ctx context.Context) {
 			continue
 		}
 		left, ok := remaining[id]
-		if !ok {
+		if !ok || e.dropped {
 			e.known = false
 			r.tidy(id, e)
 			continue
@@ -200,8 +215,10 @@ func (r *Reporter) report(ctx context.Context) {
 		if p, ok := pace[id]; ok {
 			e.pace = p
 		}
-		e.known = true
-		e.remaining = left - min(left, uint64(e.in+e.out))
+		if e.set == set[id] {
+			e.known = true
+			e.remaining = left - min(left, uint64(e.in+e.out))
+		}
 		calls = append(calls, answered{id, e.remaining, e.pace})
 	}
 	f := r.onAnswer

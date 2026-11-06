@@ -114,7 +114,12 @@ func (a *answers) take() []answer {
 // start runs a reporter every 5 s with an 8 MiB threshold until the test ends
 func start(t *testing.T, r *router) (*Reporter, *answers, context.CancelFunc) {
 	t.Helper()
-	rep := NewReporter(r.send, 5*time.Second, 8*mib)
+	return startWith(t, r, 8*mib)
+}
+
+func startWith(t *testing.T, r *router, threshold int64) (*Reporter, *answers, context.CancelFunc) {
+	t.Helper()
+	rep := NewReporter(r.send, 5*time.Second, threshold)
 	a := &answers{}
 	rep.OnAnswer(a.on)
 	ctx, cancel := context.WithCancel(t.Context())
@@ -317,6 +322,84 @@ func TestReporterDropKeepsBytesToSend(t *testing.T) {
 		synctest.Wait()
 		reports, _ := r.seen()
 		eq(t, reports, [][]usage{{{"p1", 5, 2 * mib}}})
+		eq(t, rep.size(), 0)
+	})
+}
+
+func TestReporterLateAnswerKeepsANewerFigure(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		r := newRouter()
+		r.remaining = map[string]uint64{"p1": 1 * mib}
+		r.pace = map[string]uint64{"p1": 5 * mib}
+		hold := make(chan struct{})
+		r.hold = hold
+		rep, a, _ := start(t, r)
+		rep.Add("p1", 8*mib, 0)
+		synctest.Wait()
+
+		// An extension lands while the report is out
+		rep.SetRemaining("p1", 2048*mib)
+		rep.Add("p1", 0, 1*mib)
+		close(hold)
+		synctest.Wait()
+		eq(t, a.take(), []answer{{"p1", 2047 * mib, 5 * mib}})
+
+		r.set(func(r *router) { r.hold = make(chan struct{}) })
+		rep.Add("p1", 0, 2*mib)
+		synctest.Wait()
+		eq(t, a.take(), []answer(nil))
+	})
+}
+
+func TestReporterDroppedPlacementIsForgottenOnceReported(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		r := newRouter()
+		r.remaining = map[string]uint64{"p1": 50 * mib}
+		hold := make(chan struct{})
+		r.hold = hold
+		rep, a, _ := start(t, r)
+		rep.SetRemaining("p1", 50*mib)
+		rep.Add("p1", 8*mib, 0)
+		synctest.Wait()
+		rep.Add("p1", 1, 0)
+		rep.Drop("p1")
+		r.set(func(r *router) { r.hold = nil })
+		close(hold)
+		synctest.Wait()
+		eq(t, rep.size(), 1)
+
+		// The router still answers a figure, which must not bring the placement back
+		time.Sleep(5 * time.Second)
+		synctest.Wait()
+		reports, _ := r.seen()
+		eq(t, reports, [][]usage{{{"p1", 8 * mib, 0}}, {{"p1", 1, 0}}})
+		eq(t, a.take(), []answer(nil))
+		eq(t, rep.size(), 0)
+	})
+}
+
+func TestReporterDropDuringAFailedReportStillForgets(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		r := newRouter()
+		r.remaining = map[string]uint64{"p1": 50 * mib}
+		r.err = errors.New("router unreachable")
+		hold := make(chan struct{})
+		r.hold = hold
+		rep, a, _ := start(t, r)
+		rep.Add("p1", 8*mib, 0)
+		synctest.Wait()
+		rep.Drop("p1")
+		r.set(func(r *router) { r.hold = nil })
+		close(hold)
+		synctest.Wait()
+		eq(t, rep.size(), 1)
+
+		r.set(func(r *router) { r.err = nil })
+		time.Sleep(5 * time.Second)
+		synctest.Wait()
+		reports, _ := r.seen()
+		eq(t, reports[len(reports)-1], []usage{{"p1", 8 * mib, 0}})
+		eq(t, a.take(), []answer(nil))
 		eq(t, rep.size(), 0)
 	})
 }
