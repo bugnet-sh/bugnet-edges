@@ -48,6 +48,7 @@ func TestPageStatusesAndTexts(t *testing.T) {
 		{NothingOnPort(5173), 502, "Nothing is listening on port 5173 in the sandbox yet", ""},
 		{GateDown, 502, "preview service stopped. Reload in a minute", ""},
 		{RouterDown, 503, "Try again shortly", "2"},
+		{Misdirected, 421, "reached the wrong connection", ""},
 	} {
 		w := write(tc.page)
 		eq(t, w.Code, tc.status)
@@ -149,7 +150,7 @@ func TestPagesNeverNameTheProvider(t *testing.T) {
 		answers = append(answers, writeJSON(c))
 	}
 	answers = append(answers, landing(t, "abuse@example.test"))
-	if len(answers) < 24 {
+	if len(answers) < 25 {
 		t.Fatalf("only %d answers checked", len(answers))
 	}
 	for _, w := range answers {

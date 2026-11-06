@@ -20,7 +20,7 @@ type Page struct {
 	retryAfter time.Duration
 }
 
-// The pages of DP 8.6, by situation
+// The pages of DP 8.6 by situation, and 421 for a request on another name's connection
 var (
 	NotFound = Page{status: 404, title: "No such preview",
 		text: "There is nothing at this address. Check that you copied the whole link."}
@@ -39,6 +39,8 @@ var (
 		text: "The sandbox's preview service stopped. Reload in a minute."}
 	RouterDown = Page{status: 503, title: "Try again shortly",
 		text: "Try again shortly.", retryAfter: 2 * time.Second}
+	Misdirected = Page{status: 421, title: "Wrong connection",
+		text: "This request reached the wrong connection. Reload the page."}
 )
 
 // NothingOnPort is the 502 page for a sandbox port no app listens on yet
@@ -52,7 +54,7 @@ func NothingOnPort(port int) Page {
 func all() []Page {
 	return []Page{
 		NotFound, Unauthorized, Ended, BudgetSpent, SlowDown, Busy, GateDown, RouterDown,
-		NothingOnPort(3000),
+		Misdirected, NothingOnPort(3000),
 	}
 }
 
