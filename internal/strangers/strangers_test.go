@@ -162,6 +162,43 @@ func TestGuardHoldsAtMostItsCap(t *testing.T) {
 	})
 }
 
+func TestGuardAtItsCapSweepsAtMostOnceASecond(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		g := NewGuard(1, 10*time.Minute, time.Hour)
+		g.ips.max = 50
+		g.maxUnknown = 50
+		addr := func(i int) netip.Addr { return netip.AddrFrom4([4]byte{198, 51, 100, byte(i)}) }
+		token := func(i int) [32]byte { return sha256.Sum256([]byte{byte(i)}) }
+		for i := range 50 {
+			g.Failed(addr(i))
+			g.Failed(addr(i))
+			g.RememberUnknown(token(i))
+		}
+		start := time.Now()
+		swept := func(at time.Duration) {
+			t.Helper()
+			eq(t, g.ips.swept, start.Add(at))
+			eq(t, g.swept, start.Add(at))
+		}
+
+		// Every address is marked, so a sweep frees nothing and one entry gives way instead
+		time.Sleep(30 * time.Second)
+		g.Failed(addr(100))
+		g.RememberUnknown(token(100))
+		swept(30 * time.Second)
+		time.Sleep(time.Second - time.Millisecond)
+		g.Failed(addr(101))
+		g.RememberUnknown(token(101))
+		swept(30 * time.Second)
+		time.Sleep(time.Millisecond)
+		g.Failed(addr(102))
+		g.RememberUnknown(token(102))
+		swept(31 * time.Second)
+		eq(t, g.size(), 50)
+		eq(t, len(g.unknown), 50)
+	})
+}
+
 func TestPerIPAllowsItsRateAMinute(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		l := NewPerIP(60)

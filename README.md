@@ -79,7 +79,8 @@ A `strangers.PerIP` allows a number of requests a minute per address, for the se
 routes. A limit of 0 turns it off.
 
 Both forget an address once its count is back to full and its mark has run out. Each holds at most
-200,000 addresses.
+200,000 addresses, and the guard at most 100,000 failed tokens. A full table sweeps at most once a
+second. Between sweeps, one arbitrary entry gives way to each new one.
 
 ### Pace
 

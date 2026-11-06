@@ -12,7 +12,9 @@ const (
 	maxAddrs   = 200_000
 	maxUnknown = 100_000
 	sweepEvery = time.Minute
-	askEvery   = time.Second
+	// fullSweepEvery spaces a full table's sweeps, between them one arbitrary entry gives way
+	fullSweepEvery = time.Second
+	askEvery       = time.Second
 )
 
 // Guard applies the token failure rule of one route, DP 4.5
@@ -95,7 +97,9 @@ func (g *Guard) RememberUnknown(tokenSHA [32]byte) {
 	defer g.mu.Unlock()
 	g.sweepDue(now)
 	if _, ok := g.unknown[tokenSHA]; !ok && len(g.unknown) >= g.maxUnknown {
-		g.sweepUnknown(now)
+		if now.Sub(g.swept) >= fullSweepEvery {
+			g.sweepUnknown(now)
+		}
 		for k := range g.unknown {
 			if len(g.unknown) < g.maxUnknown {
 				break
@@ -198,7 +202,9 @@ func (a *addrs) get(ip netip.Addr, now time.Time) *entry {
 		return e
 	}
 	if len(a.m) >= a.max {
-		a.sweep(now)
+		if now.Sub(a.swept) >= fullSweepEvery {
+			a.sweep(now)
+		}
 		for k := range a.m {
 			if len(a.m) < a.max {
 				break
