@@ -418,3 +418,25 @@ func TestNewRefusesBadOptions(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestDaysLeftFloorsOffADayBoundary(t *testing.T) {
+	static := mustNew(t, staticOptions(t, day0.AddDate(0, 0, 10)))
+	eq(t, DaysLeft(static, day0.AddDate(0, 0, 10).Add(36*time.Hour))[transferHost], -2)
+	eq(t, DaysLeft(static, day0.AddDate(0, 0, 10).Add(-36*time.Hour))[transferHost], 1)
+}
+
+func TestWildcardKeepsLastGoodPairWhileFilesAreMissing(t *testing.T) {
+	c := &clock{t: day0}
+	o := acmeOptions(t, c, time.Now().AddDate(0, 0, 60))
+	addr := serve(t, mustNew(t, o))
+	eq(t, servedSerial(t, addr, previewName), 1)
+	for _, name := range []string{"fullchain.pem", "key.pem"} {
+		if err := os.Remove(filepath.Join(o.Wildcard.Dir, name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	c.Advance(2 * time.Minute)
+	eq(t, servedSerial(t, addr, previewName), 1)
+	c.Advance(2 * time.Minute)
+	eq(t, servedSerial(t, addr, previewName), 1)
+}
