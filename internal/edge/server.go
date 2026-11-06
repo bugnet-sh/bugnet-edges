@@ -266,7 +266,7 @@ func (s *Server) tlsServer() *http.Server {
 		MaxHeaderBytes:    s.maxHeaderBytes,
 		HTTP2:             &http.HTTP2Config{MaxConcurrentStreams: s.maxStreams},
 		ConnState:         s.hijacks.connState,
-		ErrorLog:          slog.NewLogLogger(s.log.Handler(), slog.LevelDebug),
+		ErrorLog:          serverLog(s.log),
 	}
 }
 
@@ -276,7 +276,7 @@ func (s *Server) redirectServer() *http.Server {
 		ReadHeaderTimeout: readHeaderTimeout,
 		IdleTimeout:       idleTimeout,
 		MaxHeaderBytes:    edgeHeaderBytes,
-		ErrorLog:          slog.NewLogLogger(s.log.Handler(), slog.LevelDebug),
+		ErrorLog:          serverLog(s.log),
 	}
 }
 
@@ -297,7 +297,7 @@ func (s *Server) metricsServer() *http.Server {
 		Handler:           mux,
 		ReadHeaderTimeout: readHeaderTimeout,
 		IdleTimeout:       idleTimeout,
-		ErrorLog:          slog.NewLogLogger(s.log.Handler(), slog.LevelDebug),
+		ErrorLog:          serverLog(s.log),
 	}
 }
 

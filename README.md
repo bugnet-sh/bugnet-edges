@@ -112,6 +112,9 @@ The edge routes by the `Host` header. Anything else gets the 404 page.
   no-store`, `Referrer-Policy: no-referrer`, `X-Content-Type-Options: nosniff` and a CSP of
   `default-src 'none'`. They never name a provider. Transfer errors are JSON,
   `{"error": "<code>", "message": "..."}`.
+- net/http's own messages reach the log at warn level, and a handler's panic at error level. The
+  noise any stranger can cause, such as a failed TLS handshake or a bad HTTP/2 preface or frame,
+  logs at debug level.
 
 ### Drain
 
