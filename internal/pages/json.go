@@ -67,7 +67,7 @@ func (c Code) Status() int {
 	return c.status
 }
 
-// WriteJSON answers {"error": code, "message": text}
+// WriteJSON answers the error as a JSON object with its code and message
 func WriteJSON(w http.ResponseWriter, c Code) {
 	body, _ := json.Marshal(struct {
 		Error   string `json:"error"`
