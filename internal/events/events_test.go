@@ -70,6 +70,12 @@ func (r *router) send(m msg) {
 	synctest.Wait()
 }
 
+func (r *router) set(f func(r *router)) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	f(r)
+}
+
 func (r *router) opens() ([]string, []time.Duration) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
