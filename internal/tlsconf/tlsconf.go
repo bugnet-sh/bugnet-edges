@@ -10,9 +10,11 @@ import (
 	"fmt"
 	"math"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 	"weak"
 
 	"golang.org/x/crypto/acme"
@@ -136,7 +138,7 @@ func (s *served) names(names []Name) error {
 	for _, n := range names {
 		host := normal(n.Host)
 		switch {
-		case host == "" || strings.ContainsAny(host, "*:/"):
+		case !hostName(host):
 			return errors.New("tlsconf: a name is empty or not a host name")
 		case len(n.ALPN) == 0:
 			return fmt.Errorf("tlsconf: %s offers no ALPN protocol", host)
@@ -155,8 +157,11 @@ func (s *served) wildcard(o Options) error {
 		return nil
 	}
 	suffix := normal(w.Suffix)
-	if suffix == "" || len(w.ALPN) == 0 {
-		return errors.New("tlsconf: the wildcard needs a suffix and an ALPN list")
+	switch {
+	case !hostName(suffix):
+		return errors.New("tlsconf: the wildcard suffix is empty or not a host name")
+	case len(w.ALPN) == 0:
+		return errors.New("tlsconf: the wildcard offers no ALPN protocol")
 	}
 	s.suffix = "." + suffix
 	s.pair = s.static
@@ -181,6 +186,14 @@ func config(alpn []string, get func(*tls.ClientHelloInfo) (*tls.Certificate, err
 
 func normal(host string) string {
 	return strings.ToLower(strings.TrimSuffix(host, "."))
+}
+
+// hostName reports whether a normal name has no empty label and nothing a server name never holds
+func hostName(name string) bool {
+	return !slices.Contains(strings.Split(name, "."), "") &&
+		!strings.ContainsFunc(name, func(r rune) bool {
+			return r == '*' || r == ':' || r == '/' || unicode.IsSpace(r)
+		})
 }
 
 func (s *served) configFor(hello *tls.ClientHelloInfo) (*tls.Config, error) {

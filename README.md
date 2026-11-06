@@ -39,6 +39,8 @@ and so does a client below TLS 1.2.
   restart.
 - With ACME off, one static pair serves every name, the wildcard too. Unit tests and the live
   stack's local mode use it with a self-signed certificate.
+- An exact name or the wildcard suffix with an empty label, `*`, `:`, `/` or a space is refused at
+  start. Write the suffix as `preview.bugnet.sh`, not `.preview.bugnet.sh` or `*.preview.bugnet.sh`.
 
 ## Calling the router
 

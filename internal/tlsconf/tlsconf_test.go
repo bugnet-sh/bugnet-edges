@@ -372,9 +372,31 @@ func TestNewRefusesBadOptions(t *testing.T) {
 		"no ALPN":  func(o *Options) { o.Names[1].ALPN = nil },
 		"no host":  func(o *Options) { o.Names[1].Host = "" },
 		"star":     func(o *Options) { o.Names[1].Host = "*.example.test" },
+		"dot":      func(o *Options) { o.Names[1].Host = ".example.test" },
+		"dots":     func(o *Options) { o.Names[1].Host = "transfer..example.test" },
+		"space":    func(o *Options) { o.Names[1].Host = "transfer example.test" },
+		"port":     func(o *Options) { o.Names[1].Host = "transfer.example.test:443" },
 		"twice":    func(o *Options) { o.Names[1].Host = "PREVIEW.example.test" },
 		"no wild":  func(o *Options) { o.Wildcard.Dir = t.TempDir() },
 		"suffix":   func(o *Options) { o.Wildcard.Suffix = "" },
+		"suffix dot": func(o *Options) {
+			o.Wildcard.Suffix = ".preview.example.test"
+		},
+		"suffix star": func(o *Options) {
+			o.Wildcard.Suffix = "*.preview.example.test"
+		},
+		"suffix dots": func(o *Options) {
+			o.Wildcard.Suffix = "preview..example.test"
+		},
+		"suffix port": func(o *Options) {
+			o.Wildcard.Suffix = "preview.example.test:443"
+		},
+		"suffix path": func(o *Options) {
+			o.Wildcard.Suffix = "preview.example.test/x"
+		},
+		"suffix space": func(o *Options) {
+			o.Wildcard.Suffix = "preview.example.test "
+		},
 		"wild ALPN": func(o *Options) {
 			o.Wildcard.ALPN = nil
 		},
@@ -389,7 +411,7 @@ func TestNewRefusesBadOptions(t *testing.T) {
 		o := acmeOptions(t, c, day0.AddDate(0, 0, 60))
 		change(&o)
 		if _, err := New(o); err == nil {
-			t.Fatalf("%s: New accepted it", name)
+			t.Errorf("%s: New accepted it", name)
 		}
 	}
 	if _, err := New(acmeOptions(t, c, day0.AddDate(0, 0, 60))); err != nil {
