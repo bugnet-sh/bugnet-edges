@@ -16,6 +16,11 @@ The binaries are `bugnet-edge` (also run as `bugnet-secrets`), `bugnet-ssh`, `bu
 | `internal/settings` | Strict TOML settings files, byte sizes and durations |
 | `internal/routerclient` | Bearer-token HTTP clients for router-api's Connect services |
 | `internal/metrics` | Counters and gauges in the Prometheus text format, with no client library |
+| `internal/strangers` | Limits on clients without a valid token, per client address |
+| `internal/pace` | Per-placement pace each way, under one total cap per process |
+| `internal/usage` | Byte counts sent to the router, and the bytes left it answers |
+| `internal/events` | The router's event stream, resumed from its cursor |
+| `internal/lease` | One context per placement that ends at its deadline, end or spent budget |
 
 ## Listeners
 
@@ -51,6 +56,87 @@ send the caller's token only to the router URL and never follow a redirect.
 | --- | --- | --- |
 | `New` | h2c to an `http://` router, else h2 or HTTP/1.1 over TLS | Every call but transfers |
 | `PerCall` | HTTP/1.1, one connection per call | Transfers, so one stalled stalls no other |
+
+## Traffic
+
+These libraries count, limit and cut each placement's traffic. The edge, the SSH gateway and the
+egress proxy share them.
+
+### Strangers
+
+A `strangers.Guard` applies the token failure rule to one route.
+
+- Each client address may send a set number of tokens a minute that fail to resolve, 20 in the
+  edge's settings. The next one marks the address for 10 minutes, counted from the last failure
+  past the limit.
+- A marked address gets 429 for unknown tokens. At most one of its tokens a second goes to the
+  router, so a valid token from behind a shared NAT still works.
+- A token that failed is remembered by its SHA-256 for 10 seconds and never asked again in that
+  time.
+- An IPv4-mapped address counts as its IPv4 address.
+
+A `strangers.PerIP` allows a number of requests a minute per address, for the secrets and hooks
+routes. A limit of 0 turns it off.
+
+Both forget an address once its count is back to full and its mark has run out. Each holds at most
+200,000 addresses.
+
+### Pace
+
+A `pace.Pacer` gives each placement a lane with one limiter each way, burst 64 KiB.
+
+- Reads and writes move in pieces of at most 64 KiB. Each piece waits on the lane, then on the
+  process's total cap, so busy placements take turns.
+- A new lane has no pace of its own until `SetRate`. A rate of 0 means the same.
+- `pace.New(0)` has no total cap.
+- `Drop` forgets a placement's lane and ends the reads and writes waiting on it.
+
+### Usage
+
+A `usage.Reporter` sends each placement's bytes to the router every interval (5 s), or at once
+when one placement has built up the threshold (8 MiB).
+
+- The router answers the bytes left and, for the edge and the SSH gateway, the pace. `OnAnswer`
+  hands both on, less the bytes counted since the report went out.
+- Between answers the reporter counts the bytes left down itself. When that reaches zero it calls
+  `OnAnswer` with zero at once, even while the router is down.
+- A failed report keeps its bytes for the next one. While the router is down, reports go once an
+  interval, not at every threshold.
+- `SetRemaining` sets the bytes left from a resolve, a lease check or an event.
+- When `Run` stops, it sends what is left once.
+
+### Events
+
+An `events.Watcher` keeps one `Watch*Events` stream open.
+
+- It hands each event on in order and resumes from the last cursor after a break.
+- A `Resync` event, or a reconnect that had no cursor to resume from, asks for a lease check.
+- It reports the stream down at once, and back once the stream has stayed open a second or
+  delivered a message.
+- Reconnects back off from 250 ms to 10 s, a quarter either way, and start over once a stream
+  was up.
+
+### Leases
+
+A `lease.Table` holds one lease per placement. A lease is a context with a timer at the paid
+deadline. Requests, transfers, connections and tunnels run under its children.
+
+| What happens | The lease |
+| --- | --- |
+| The deadline timer fires | Asks the router once (2 s), ends with `expired` unless it moved |
+| A check leaves the placement out | Ends with `ended` |
+| A check, a move or a put says 0 bytes left | Ends with `budget` |
+| A check names a held preview as revoked | Ends only that preview's children, with `revoked` |
+| A check answers another secrets version | Calls `OnVersion` once per change |
+
+- Checks run every 60 s, and every 30 s while the event stream is down. `EdgeCheck` sends the
+  held previews with `CheckEdgeLeases`. `EgressCheck` reads each secrets version from
+  `CheckEgressLeases`.
+- An answer to a check sent before the lease last changed is not applied to it, so a late answer
+  never undoes an extension.
+- `Apply` acts on one event: `PlacementEnded`, `DeadlineMoved`, `PreviewRevoked`, the binary's
+  own `BudgetSpent` kind and `Resync`.
+- `lease.Reason(ctx)` gives the reason a lease or child context ended with.
 
 ## Settings
 
