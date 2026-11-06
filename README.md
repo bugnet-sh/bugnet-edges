@@ -74,6 +74,7 @@ A `strangers.Guard` applies the token failure rule to one route.
 - A token that failed is remembered by its SHA-256 for 10 seconds and never asked again in that
   time.
 - An IPv4-mapped address counts as its IPv4 address.
+- A limit of 0 marks no address. Failed tokens are still remembered.
 
 A `strangers.PerIP` allows a number of requests a minute per address, for the secrets and hooks
 routes. A limit of 0 turns it off.

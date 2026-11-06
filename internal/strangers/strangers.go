@@ -21,24 +21,28 @@ const (
 type Guard struct {
 	mark, unknownTTL time.Duration
 
-	mu         sync.Mutex
+	mu sync.Mutex
+	// ips is nil when failed tokens are not limited
 	ips        *addrs
 	unknown    map[[32]byte]time.Time
 	maxUnknown int
 	swept      time.Time
 }
 
-// NewGuard allows perMinute failed tokens a minute per address, the next marks it for mark
+// NewGuard marks an address for mark past perMinute failed tokens a minute, 0 or less marks none
 func NewGuard(perMinute int, mark, unknownTTL time.Duration) *Guard {
 	now := time.Now()
-	return &Guard{
+	g := &Guard{
 		mark:       mark,
 		unknownTTL: unknownTTL,
-		ips:        newAddrs(perMinute, now),
 		unknown:    map[[32]byte]time.Time{},
 		maxUnknown: maxUnknown,
 		swept:      now,
 	}
+	if perMinute > 0 {
+		g.ips = newAddrs(perMinute, now)
+	}
+	return g
 }
 
 // Marked reports whether unknown tokens from ip get 429
@@ -53,6 +57,9 @@ func (g *Guard) Marked(ip netip.Addr) bool {
 
 // Failed counts a token from ip that did not resolve, marking ip once past the limit
 func (g *Guard) Failed(ip netip.Addr) {
+	if g.ips == nil {
+		return
+	}
 	now := time.Now()
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -191,6 +198,9 @@ func key(ip netip.Addr) netip.Addr {
 }
 
 func (a *addrs) find(ip netip.Addr, now time.Time) *entry {
+	if a == nil {
+		return nil
+	}
 	a.sweepDue(now)
 	return a.m[key(ip)]
 }

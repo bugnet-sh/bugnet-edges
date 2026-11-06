@@ -199,6 +199,23 @@ func TestGuardAtItsCapSweepsAtMostOnceASecond(t *testing.T) {
 	})
 }
 
+func TestGuardZeroIsOff(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		g := NewGuard(0, 10*time.Minute, 10*time.Second)
+		for range 100 {
+			g.Failed(ip)
+		}
+		eq(t, g.Marked(ip), false)
+		eq(t, g.MayAsk(ip), true)
+		eq(t, g.MayAsk(ip), true)
+		eq(t, g.size(), 0)
+
+		a := sha256.Sum256([]byte("bnp_a"))
+		g.RememberUnknown(a)
+		eq(t, g.KnownUnknown(a), true)
+	})
+}
+
 func TestPerIPAllowsItsRateAMinute(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		l := NewPerIP(60)
