@@ -1,0 +1,9 @@
+/bin/
+/dist/
+*.test
+*.out
+.DS_Store
+.env*
+!.env.example
+/.superpowers/
+node_modules/
