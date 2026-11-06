@@ -5,6 +5,7 @@ go 1.27
 replace github.com/oynozan/bugnet-proto => ../bugnet-proto
 
 require (
+	github.com/pelletier/go-toml/v2 v2.2.4
 	github.com/pires/go-proxyproto v0.16.0
 	golang.org/x/crypto v0.58.0
 	golang.org/x/sys v0.49.0

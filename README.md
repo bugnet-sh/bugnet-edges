@@ -13,6 +13,7 @@ The binaries are `bugnet-edge` (also run as `bugnet-secrets`), `bugnet-ssh`, `bu
 | --- | --- |
 | `internal/proxyproto` | Listeners that take only trusted sources opening with a PROXY v2 header |
 | `internal/tlsconf` | One TLS config that picks the certificate and ALPN list by SNI |
+| `internal/settings` | Strict TOML settings files, byte sizes and durations |
 
 ## TLS
 
@@ -24,6 +25,24 @@ The binaries are `bugnet-edge` (also run as `bugnet-secrets`), `bugnet-ssh`, `bu
   restart.
 - With ACME off, one static pair serves every name, the wildcard too. Unit tests and the live
   stack's local mode use it with a self-signed certificate.
+
+## Settings
+
+Each binary reads one TOML file through `internal/settings`. Loading fails, naming the line and
+the key, when:
+
+- a key names no setting, or differs from one only in case (`Drain` for `drain`);
+- a key or table is set twice;
+- a value has the wrong kind, or does not fit, such as `drain = 5` or `300` for an 8-bit number.
+
+Errors never quote a value. A line that is not valid TOML is named by its line alone.
+
+| Type | Written as | Range |
+| --- | --- | --- |
+| `settings.Bytes` | Bytes, `KiB`, `MiB` or `GiB`, such as `"65536"` or `"64KiB"` | 0 to 1 TiB |
+| `settings.Duration` | Go's form, such as `"30s"`, `"5m"` or `"1h30m"` | 0 or more |
+
+Secrets never go in these files. They come from the environment.
 
 ## Prerequisites
 
