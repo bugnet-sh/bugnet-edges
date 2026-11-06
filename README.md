@@ -87,7 +87,9 @@ A `pace.Pacer` gives each placement a lane with one limiter each way, burst 64 K
 
 - Reads and writes move in pieces of at most 64 KiB. Each piece waits on the lane, then on the
   process's total cap, so busy placements take turns.
-- A new lane has no pace of its own until `SetRate`. A rate of 0 means the same.
+- A new lane has no pace of its own until `SetRate`. A rate of 0 means the same. So the caller
+  sets the starting pace from the resolve's `bytes_per_second` when it makes the lease, and each
+  usage answer's pace after that.
 - `pace.New(0)` has no total cap.
 - `Drop` forgets a placement's lane and ends the reads and writes waiting on it.
 
