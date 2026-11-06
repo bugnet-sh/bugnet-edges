@@ -15,6 +15,7 @@ The binaries are `bugnet-edge` (also run as `bugnet-secrets`), `bugnet-ssh`, `bu
 | `internal/tlsconf` | One TLS config that picks the certificate and ALPN list by SNI |
 | `internal/settings` | Strict TOML settings files, byte sizes and durations |
 | `internal/routerclient` | Bearer-token HTTP clients for router-api's Connect services |
+| `internal/metrics` | Counters and gauges in the Prometheus text format, with no client library |
 
 ## TLS
 
