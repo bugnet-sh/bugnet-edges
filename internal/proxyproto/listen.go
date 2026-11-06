@@ -2,17 +2,16 @@
 package proxyproto
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/netip"
-	"syscall"
 	"time"
 
 	pp "github.com/pires/go-proxyproto"
-	"golang.org/x/sys/unix"
+
+	"github.com/oynozan/bugnet-edges/internal/reuseport"
 )
 
 var (
@@ -29,8 +28,7 @@ func Listen(addr string, trusted []netip.Prefix) (net.Listener, error) {
 			return nil, errors.New("proxyproto: a trusted prefix is not valid")
 		}
 	}
-	lc := net.ListenConfig{Control: reusePort}
-	ln, err := lc.Listen(context.Background(), "tcp", addr)
+	ln, err := reuseport.Listen(addr)
 	if err != nil {
 		return nil, fmt.Errorf("proxyproto: %w", err)
 	}
@@ -40,15 +38,6 @@ func Listen(addr string, trusted []netip.Prefix) (net.Listener, error) {
 		ValidateHeader:    versionTwo,
 		ReadHeaderTimeout: headerTimeout,
 	}}, nil
-}
-
-// reusePort lets a new version bind beside the old one during a deploy
-func reusePort(_, _ string, rc syscall.RawConn) error {
-	var serr error
-	err := rc.Control(func(fd uintptr) {
-		serr = unix.SetsockoptInt(int(fd), unix.SOL_SOCKET, unix.SO_REUSEPORT, 1)
-	})
-	return errors.Join(err, serr)
 }
 
 // trust requires the header from trusted sources and closes connections from any other
