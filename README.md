@@ -34,8 +34,8 @@ send the caller's token only to the router URL and never follow a redirect.
 
 | Client | Protocol | Used for |
 | --- | --- | --- |
-| `New` | h2c to an `http://` router, h2 or HTTP/1.1 to an `https://` one | Every call but transfers |
-| `PerCall` | HTTP/1.1, one connection per call | Transfer streams, so a stalled one stalls no other |
+| `New` | h2c to an `http://` router, else h2 or HTTP/1.1 over TLS | Every call but transfers |
+| `PerCall` | HTTP/1.1, one connection per call | Transfers, so one stalled stalls no other |
 
 ## Settings
 
