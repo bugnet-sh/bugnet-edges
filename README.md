@@ -31,6 +31,7 @@ The binaries are `bugnet-edge` (also run as `bugnet-secrets`), `bugnet-ssh`, `bu
 | `internal/events` | The router's event stream, resumed from its cursor |
 | `internal/lease` | One context per placement that ends at its deadline, end or spent budget |
 | `internal/x402` | `[x402]` settings, refusals, dollar text, headers, paths, 402s, bodies, cache |
+| `internal/x402/x402test` | A test CA in the `mtls init --dev` layout and a fake Payments signer |
 
 ## Listeners
 
