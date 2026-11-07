@@ -1,0 +1,21 @@
+# x402-fake-seller's settings (XS 11.2 and 11.3), read with -config FILE
+# Its one secret, fee_payer's key, comes only from the variable fee_payer_key_env names
+
+listen = "127.0.0.1:8403"             # TLS only, on loopback by default
+tls_cert_file = ""                    # a PEM chain, with tls_key_file, or ACME below
+tls_key_file = ""
+acme_hosts = []                       # names issued by TLS-ALPN-01 on listen, with acme_dir
+acme_dir = ""                         # an absolute path, the ACME account and certificates
+pay_to = ""                           # required, the seller's wallet, base58 of 32 bytes
+pay_to_token_account = ""             # pay_to's USDC account, required for settle = "self"
+fee_payer = ""                        # required, extra.feePayer in every 402
+bugnet_fee_payer = ""                 # required, the Bugnet address /feepayer-bugnet/ names
+settle = "self"                       # "self" sends to chain_url, "facilitator" uses its URL
+chain_url = ""                        # a Solana JSON-RPC URL, for settle = "self"
+facilitator_url = ""                  # an x402 facilitator's base URL, for settle = "facilitator"
+fee_payer_key_env = "TESTSELLER_FEE_PAYER_KEY"   # holds fee_payer's key, for settle = "self"
+test_token_env = "TESTSELLER_TEST_TOKEN"         # its value opens /__test/, unset keeps it closed
+late = "20s"                          # /late/ settles this long after its answer
+slow = "120s"                         # /slow/ waits this long before it settles
+stall = "40s"                         # /stall/ holds a first send this long
+redirect_to = "https://example.com/"  # where /redirect/ sends a paid retry

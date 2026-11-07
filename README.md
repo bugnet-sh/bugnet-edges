@@ -5,7 +5,8 @@ provider keys and reach sandboxes only through the `bugnet-run` gate on port 294
 `router-api` over Connect with its own bearer token.
 
 The binaries are `bugnet-edge` (also run as `bugnet-secrets`), `bugnet-ssh`, `bugnet-egress` and
-`bugnet-certs`. They share the libraries under `internal`.
+`bugnet-certs`. They share the libraries under `internal`. `x402-fake-seller` is a test seller for
+local and mainnet test runs, never deployed with them.
 
 ## Layout
 
@@ -13,6 +14,7 @@ The binaries are `bugnet-edge` (also run as `bugnet-secrets`), `bugnet-ssh`, `bu
 | --- | --- |
 | `cmd/bugnet-edge` | The HTTP edge, and with `--role secrets` the secrets route |
 | `cmd/bugnet-certs` | Renews the preview wildcards by DNS-01 and checks every served certificate |
+| `cmd/x402-fake-seller` | The fake x402 seller over TLS, settling to a chain or a facilitator |
 | `internal/edge` | Both roles' settings, listeners, host routing, HSTS and drain |
 | `internal/pages` | The edge's own HTML pages and the transfer route's JSON errors |
 | `internal/certs` | `bugnet-certs`' settings, renewal, writing by rename and the expiry alert |
@@ -398,6 +400,29 @@ payload as the payer sent it and the requirements as its `accepted` entry. It se
 `isValid: true`. An answer of `isValid: false` or `success: false` passes on its reason, at any
 HTTP status. An answer with neither field, or a settle with no 64-byte transaction signature, is
 `unexpected_settle_error`.
+
+### The binary
+
+`x402-fake-seller -config FILE` serves `fakeseller.New` over TLS. `make build` writes
+`bin/x402-fake-seller`, and `example/x402-fake-seller.toml` holds every setting at its default.
+
+- TLS comes from `tls_cert_file` and `tls_key_file`, or from Let's Encrypt for `acme_hosts` by
+  TLS-ALPN-01 on `listen`, with the account and certificates in `acme_dir`. One of the two must
+  be set, never both.
+- `settle = "self"` uses `SelfSettle` with `chain_url` and `pay_to_token_account`.
+  `settle = "facilitator"` uses `Facilitator` with `facilitator_url`, and the seller then holds
+  no key.
+- `fee_payer`'s key comes only from the variable `fee_payer_key_env` names,
+  `TESTSELLER_FEE_PAYER_KEY` by default, the name Payments' `keys testseller` writes. It is 64
+  bytes in base58 or a JSON byte array, as Payments writes keys, and its public half must be
+  `fee_payer`. A key in the file is an unknown setting. A missing variable stops the start and
+  names `fee_payer_key_env`. No message quotes the key.
+- The test API opens when the variable `test_token_env` names is set, `TESTSELLER_TEST_TOKEN` by
+  default.
+- `late`, `slow` and `stall` set the mode delays, and `redirect_to` where `/redirect/` points.
+- The server reads headers for at most 10 s and has no read or write timeout, so a 150 s
+  `/hold/`, a 3-minute `/sse/` and a slow upload are never cut.
+- It logs the address it serves on, and nothing about a request.
 
 ### The test transfer and the facilitator goldens
 

@@ -13,6 +13,7 @@ lint:
 
 build:
 	go build ./...
+	go build -o bin/x402-fake-seller ./cmd/x402-fake-seller
 
 # Copies the dev wildcard pair from the VPS over the admin SSH, so the DNS token never leaves it
 dev-certs:
