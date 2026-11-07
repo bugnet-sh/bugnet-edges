@@ -9,14 +9,14 @@ import (
 	"time"
 )
 
-// probeSize is the one read past the limit that tells a whole body from one that grows on
-const probeSize = 32 << 10
+// chunkSize is each read of the body, the only bytes it holds outside the slot
+const chunkSize = 4 << 10
 
 // Replay is a request body kept for one paid retry
 type Replay struct {
-	// Kept is the body read before the stop, set once Wait returns
+	// Kept is the body for the paid retry once Wait returns, nil when the read is marked
 	Kept []byte
-	// Sum is the SHA-256 of Kept
+	// Sum is the SHA-256 of Kept, zero when the read is marked
 	Sum [32]byte
 	// Mark is empty, body_slow or body_too_large
 	Mark Code
@@ -34,7 +34,7 @@ type Replay struct {
 	mu sync.Mutex
 	// grown wakes Upstream when buf grows or the keeping stops
 	grown *sync.Cond
-	// buf is the body kept so far, in room the size of the slot from the start
+	// buf is the body kept so far in room the size of the slot, nil once Upstream yielded it
 	buf     []byte
 	stopped bool
 	slot    *Slot
@@ -93,19 +93,15 @@ func (r *Replay) FreeOnMark(s *Slot) {
 	}
 }
 
-// keep moves body into buf until the end, a byte past the limit or the stop at the deadline
+// keep moves body into buf a chunk at a time, so the read in flight at a stop holds no slot room
 func (r *Replay) keep() {
 	defer close(r.exited)
 	defer r.timer.Stop()
-	room := r.buf[:r.limit]
-	var probe []byte
+	chunk := make([]byte, chunkSize)
 	for n := 0; ; {
-		p := room[n:]
-		if n == r.limit {
-			if probe == nil {
-				probe = make([]byte, probeSize)
-			}
-			p = probe
+		p := chunk
+		if room := r.limit - n; room > 0 {
+			p = chunk[:min(room, chunkSize)]
 		}
 		k, err := r.body.Read(p)
 
@@ -118,7 +114,7 @@ func (r *Replay) keep() {
 			r.stop(CodeBodyTooLarge)
 		default:
 			n += k
-			r.buf = room[:n]
+			r.buf = append(r.buf, p[:k]...)
 			r.grown.Broadcast()
 			if err != nil {
 				r.tailErr = err
@@ -142,10 +138,11 @@ func (r *Replay) stop(mark Code) {
 		return
 	}
 	r.stopped = true
-	r.Kept = r.buf[:len(r.buf):len(r.buf)]
-	r.Sum = sha256.Sum256(r.Kept)
 	r.Mark = mark
-	if mark != "" {
+	if mark == "" {
+		r.Kept = r.buf[:len(r.buf):len(r.buf)]
+		r.Sum = sha256.Sum256(r.Kept)
+	} else {
 		r.slot.Free()
 	}
 	r.grown.Broadcast()
@@ -155,8 +152,10 @@ func (r *Replay) stop(mark Code) {
 // upstream is Replay.Upstream
 type upstream struct {
 	r *Replay
-	// sent counts the bytes of buf yielded, then tailSent those of tail
-	sent, tailSent int
+	// sent counts the bytes of buf yielded
+	sent int
+	// past is set once every kept byte is yielded after the stop
+	past bool
 }
 
 func (u *upstream) Read(p []byte) (int, error) {
@@ -164,27 +163,39 @@ func (u *upstream) Read(p []byte) (int, error) {
 		return 0, nil
 	}
 	r := u.r
-	r.mu.Lock()
-	for u.sent == len(r.buf) && !r.stopped {
-		r.grown.Wait()
+	if !u.past {
+		if n := u.readKept(p); n > 0 {
+			return n, nil
+		}
 	}
-	if u.sent < len(r.buf) {
-		kept := r.buf[u.sent:]
-		r.mu.Unlock()
-		n := copy(p, kept)
-		u.sent += n
-		return n, nil
-	}
-	r.mu.Unlock()
 
 	<-r.exited
-	if u.tailSent < len(r.tail) {
-		n := copy(p, r.tail[u.tailSent:])
-		u.tailSent += n
+	if len(r.tail) > 0 {
+		n := copy(p, r.tail)
+		r.tail = r.tail[n:]
 		return n, nil
 	}
 	if r.tailErr != nil {
 		return 0, r.tailErr
 	}
 	return r.body.Read(p)
+}
+
+// readKept yields kept bytes as they land, and lets go of buf with its last byte after the stop
+func (u *upstream) readKept(p []byte) int {
+	r := u.r
+	r.mu.Lock()
+	for u.sent == len(r.buf) && !r.stopped {
+		r.grown.Wait()
+	}
+	kept := r.buf[u.sent:]
+	n := min(len(p), len(kept))
+	if r.stopped && n == len(kept) {
+		u.past = true
+		r.buf = nil
+	}
+	r.mu.Unlock()
+	copy(p, kept[:n])
+	u.sent += n
+	return n
 }

@@ -9,9 +9,11 @@ import (
 	"io"
 	"math/rand/v2"
 	"net/http"
+	"runtime"
 	"testing"
 	"testing/iotest"
 	"time"
+	"weak"
 )
 
 var errBroken = errors.New("connection reset")
@@ -151,8 +153,8 @@ func TestReplayBodySlow(t *testing.T) {
 	r := ReadReplay(in, mib, time.Now().Add(100*time.Millisecond))
 	wait(t, r)
 	eq(t, r.Mark, CodeBodySlow)
-	same(t, r.Kept, body[:10])
-	eq(t, r.Sum, sha256.Sum256(body[:10]))
+	eq(t, len(r.Kept), 0)
+	eq(t, r.Sum, [32]byte{})
 
 	close(release)
 	same(t, drain(t, r.Upstream), body)
@@ -171,8 +173,8 @@ func TestReplayGrowsPastMax(t *testing.T) {
 			r := ReadReplay(in(t), mib, far())
 			wait(t, r)
 			eq(t, r.Mark, CodeBodyTooLarge)
-			same(t, r.Kept, body[:mib])
-			eq(t, r.Sum, sha256.Sum256(body[:mib]))
+			eq(t, len(r.Kept), 0)
+			eq(t, r.Sum, [32]byte{})
 			same(t, drain(t, iotest.HalfReader(r.Upstream)), body)
 		})
 	}
@@ -290,4 +292,94 @@ func TestReplayMarkFreesItsSlot(t *testing.T) {
 	r.FreeOnMark(take(t, b, "pl_late", mib))
 	eq(t, b.Held("pl_late"), int64(0))
 	eq(t, b.Total(), mib)
+}
+
+func TestReplayKeptHasNoSpareRoom(t *testing.T) {
+	body := pattern(300 * kib)
+	r := ReadReplay(bytes.NewReader(body), mib, far())
+	wait(t, r)
+	same(t, r.Kept, body)
+	eq(t, cap(r.Kept), len(r.Kept))
+}
+
+// sizes is a body that records the largest read asked of it
+type sizes struct {
+	io.Reader
+	largest int
+}
+
+func (s *sizes) Read(p []byte) (int, error) {
+	s.largest = max(s.largest, len(p))
+	return s.Reader.Read(p)
+}
+
+func TestReplayReadsAChunkAtATime(t *testing.T) {
+	for _, c := range []struct {
+		name        string
+		size, limit int64
+	}{
+		{"whole", 300 * kib, mib},
+		{"past the limit", mib + 10, mib},
+		{"empty at a limit of 0", 0, 0},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			in := &sizes{Reader: bytes.NewReader(pattern(c.size))}
+			r := ReadReplay(in, c.limit, far())
+			wait(t, r)
+			if in.largest > chunkSize {
+				t.Fatalf("a read asked for %d bytes, over %d", in.largest, chunkSize)
+			}
+		})
+	}
+}
+
+// weakRoom is a weak pointer to the room r keeps the body in
+func weakRoom(r *Replay) weak.Pointer[byte] {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return weak.Make(&r.buf[:1][0])
+}
+
+// collected reports whether what w points to is gone after a few collections
+func collected(w weak.Pointer[byte]) bool {
+	for range 5 {
+		runtime.GC()
+		if w.Value() == nil {
+			return true
+		}
+	}
+	return false
+}
+
+func TestReplayLetsGoOfAMarkedBody(t *testing.T) {
+	t.Run("whole body kept", func(t *testing.T) {
+		r := ReadReplay(bytes.NewReader(pattern(300*kib)), mib, far())
+		room := weakRoom(r)
+		wait(t, r)
+		drain(t, r.Upstream)
+		eq(t, collected(room), false)
+		runtime.KeepAlive(r)
+	})
+	t.Run("too large after the drain", func(t *testing.T) {
+		r := ReadReplay(bytes.NewReader(pattern(mib+10)), mib, far())
+		room := weakRoom(r)
+		wait(t, r)
+		drain(t, r.Upstream)
+		eq(t, collected(room), true)
+		runtime.KeepAlive(r)
+	})
+	t.Run("slow with the client stalled", func(t *testing.T) {
+		body := pattern(10)
+		in, _ := gated(t, body, nil, nil)
+		r := ReadReplay(in, mib, time.Now().Add(100*time.Millisecond))
+		room := weakRoom(r)
+		wait(t, r)
+		head := make([]byte, len(body))
+		if _, err := io.ReadFull(r.Upstream, head); err != nil {
+			t.Fatal(err)
+		}
+		same(t, head, body)
+		eq(t, collected(room), true)
+		runtime.KeepAlive(r)
+	})
 }
