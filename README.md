@@ -32,6 +32,7 @@ local and mainnet test runs, never deployed with them.
 | `internal/usage` | Byte counts sent to the router, and the bytes left it answers |
 | `internal/events` | The router's event stream, resumed from its cursor |
 | `internal/lease` | One context per placement that ends at its deadline, end or spent budget |
+| `internal/traffic` | One process's leases, events, usage and pace, wired together |
 | `internal/x402` | `[x402]` settings, refusals, headers, paths, 402s, bodies, cache, caps, events |
 | `internal/x402/x402test` | A test CA in the `mtls init --dev` layout and a fake Payments signer |
 | `internal/fakeseller` | The fake x402 seller of XS 11.2 and its settlers |
@@ -545,6 +546,22 @@ deadline. Requests, transfers, connections and tunnels run under its children.
 - `Apply` acts on one event: `PlacementEnded`, `DeadlineMoved`, `PreviewRevoked`, the binary's
   own `BudgetSpent` kind and `Resync`.
 - `lease.Reason(ctx)` gives the reason a lease or child context ended with.
+
+### Wiring
+
+A `traffic.Traffic` holds one process's lease table, usage reporter, pacer and event watcher,
+wired as below. `traffic.Edge` builds it on `EdgeService`. The SSH gateway and the egress proxy
+build theirs with `traffic.New` and their own calls and budget kind.
+
+- Each event goes to `Apply`. `Resync` asks for a lease check, and the stream's state switches
+  the checks between 60 s and 30 s.
+- Every state a lease takes gives the reporter its bytes left.
+- A usage answer of 0 ends the lease with `budget`. A pace above 0 repaces the placement's lane.
+- `Hold` moves the placement's live lease, or makes one and paces its lane from the router's
+  `bytes_per_second`. When that lease ends, its lane and its usage figure are dropped, unless a
+  new lease for the placement exists by then.
+- Failed checks, reports and stream opens are logged at warn level. The libraries never log.
+- `Run` stops once its context ends, after one last usage report.
 
 ## Settings
 
