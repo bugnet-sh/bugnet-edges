@@ -34,7 +34,7 @@ const (
 // memoText fills a memo, ASCII so any cut of it is UTF-8
 const memoText = "bugnet fake seller memo "
 
-// modes are the prefixes that take no number, each a mode of XS 11.2 or of Task X28
+// modes are the prefixes that take no number, each a mode of XS 11.2 or one the live rows add
 var modes = map[string]bool{
 	"ok": true, "cents": true, "cent": true, "bait": true, "switch": true, "splits": true,
 	"upto": true, "escrow": true, "upfront": true, "ata": true, "feepayer-bugnet": true,

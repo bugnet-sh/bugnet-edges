@@ -13,7 +13,7 @@ import (
 	"github.com/oynozan/bugnet-edges/internal/x402"
 )
 
-// fakeTx starts the transaction of Task X27's fixed test format, fake- and the request's ref
+// fakeTx starts the transaction of x402test.PaymentSignature, fake- and the request's ref
 const fakeTx = "fake-"
 
 // The reasons InMemory refuses to settle, each answered to the payer as a new 402
