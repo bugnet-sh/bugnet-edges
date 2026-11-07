@@ -463,6 +463,10 @@ A `strangers.Guard` applies the token failure rule to one route.
 A `strangers.PerIP` allows a number of requests a minute per address, for the secrets and hooks
 routes. A limit of 0 turns it off.
 
+A `strangers.Conns` caps the connections each address holds open at once, 16 on the transfer
+route. `Acquire` takes a slot and hands back its release, which is safe to call twice. An address
+with nothing open is forgotten at once.
+
 Both forget an address once its count is back to full and its mark has run out. Each holds at most
 200,000 addresses, and the guard at most 100,000 failed tokens. A full table sweeps at most once a
 second. Between sweeps, one arbitrary entry gives way to each new one.
