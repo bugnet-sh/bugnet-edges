@@ -30,7 +30,7 @@ The binaries are `bugnet-edge` (also run as `bugnet-secrets`), `bugnet-ssh`, `bu
 | `internal/usage` | Byte counts sent to the router, and the bytes left it answers |
 | `internal/events` | The router's event stream, resumed from its cursor |
 | `internal/lease` | One context per placement that ends at its deadline, end or spent budget |
-| `internal/x402` | Egress's `[x402]` settings, refusals, dollar text, headers, target rule, match |
+| `internal/x402` | `[x402]` settings, refusals, dollar text, headers, target, match, 402 checks |
 
 ## Listeners
 
