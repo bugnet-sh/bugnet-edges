@@ -236,8 +236,7 @@ func temp(dir, name string, body []byte, gid int) (string, error) {
 // errKey is a key.pem that is missing, or that is not the key of fullchain.pem's leaf
 var errKey = errors.New("key.pem is missing or is not the chain's key")
 
-// readPair is the leaf of dir's fullchain.pem, nil when there is none, and errKey beside the leaf
-// when key.pem does not complete the pair
+// readPair is dir's leaf, nil when there is none, with errKey when key.pem does not complete it
 func readPair(dir string) (*x509.Certificate, error) {
 	chain, err := os.ReadFile(filepath.Join(dir, "fullchain.pem"))
 	if errors.Is(err, os.ErrNotExist) {
