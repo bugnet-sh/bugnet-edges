@@ -30,7 +30,7 @@ The binaries are `bugnet-edge` (also run as `bugnet-secrets`), `bugnet-ssh`, `bu
 | `internal/usage` | Byte counts sent to the router, and the bytes left it answers |
 | `internal/events` | The router's event stream, resumed from its cursor |
 | `internal/lease` | One context per placement that ends at its deadline, end or spent budget |
-| `internal/x402` | `[x402]` settings, refusals, headers, paths, 402s, bodies, cache, unpaid caps |
+| `internal/x402` | `[x402]` settings, refusals, headers, paths, 402s, bodies, cache, caps, events |
 | `internal/x402/x402test` | A test CA in the `mtls init --dev` layout and a fake Payments signer |
 | `internal/fakeseller` | The fake x402 seller of XS 11.2 and an in-memory settler |
 
@@ -260,6 +260,58 @@ the unpaid requests a minute per host across placements, the founder's pick (b) 
 - The floor is `host_rate_floor_per_placement` requests a minute per placement and host, counted
   from the placement's first request to the host.
 - Past windows and full buckets are forgotten once a minute.
+
+## x402 events
+
+`x402.Events` queues one row per x402 request for each placement and sends them through the
+router's `AppendX402Events` (XS 6.14). The interval is `event_flush_interval`.
+
+| Part | Rule |
+| --- | --- |
+| `Shape` | Puts a row in XS 8.1's shape, as the table below says |
+| `Add` | Queues a copy with `count` 1, a `ref` when it has none, and `at` now when it has none |
+| `RefusedHost` | Queues a `refused_host` row for a failed handshake on a placement with services |
+| `SetServices` | Gives `RefusedHost` its check that a placement has x402 services |
+| `Run` | Sends each interval, at 50 unsent rows, at each minute's close and once at the end |
+| `EventsSend` | Builds the sender from the router's `EgressService` client |
+
+`Shape` keeps these fields:
+
+| Field | Kept when |
+| --- | --- |
+| `method` | It is 1 to 10 capital letters, else `OTHER`. Empty on `refused_host` |
+| `path` | The target passed XS 6.7, never on `path_refused` or `upgrade_refused`. Cut to 80 |
+| `host` | It is visible ASCII. Cut to 253 |
+| `asked_micros`, `asset`, `network`, `scheme`, `x402_version` | The offer is exact USDC on Solana |
+| `pay_to` | The offer is exact USDC on Solana and it decodes to 32 bytes |
+
+Folding:
+
+- A row can involve money when its status is `paid`, `uncertain` or `payment_failed`, or its
+  amount is above 0. Such a row is never folded.
+- Every other row folds per placement by host, `service_id`, status and reason, within the UTC
+  minute of its `at`. The first call of a minute is queued at once with `count` 1. The later
+  calls become one row with their `count`, summed bytes, the newest `at` and the second call's
+  other fields, queued when the minute closes.
+- A call whose minute already closed is queued at once, and its later calls at the next flush.
+- `RefusedHost` lower-cases the name and keeps it when it is only `a-z`, `0-9`, `.` and `-`, cut
+  to 63. Each placement keeps 10 names a minute. Other names, and names past 10, fold into one
+  row a minute with an empty host, queued when the minute closes.
+- When `Run` ends it queues every open window and sends each queue once, within one interval.
+
+Sending:
+
+- A batch holds at most 50 rows of one placement, money rows first.
+- A send gets one interval. A failed send keeps every `ref`, so the router stores a row once.
+- A row that cannot involve money is sent again 3 times, then dropped. A money row is sent
+  again for 5 minutes from its first failure, then dropped.
+- `InvalidArgument` drops the whole batch at once. Rows the router names in `rejected` are
+  dropped and never sent again.
+- A send cut by the end of `Run` counts no try. Its rows go out with the last flush.
+- Each row gets one log line when the router takes it, rejects it, or it is dropped. The line
+  holds a hash of the placement id (`PlacementHash`), the host, method, status, reason, amount,
+  bytes and count. A drop adds why, and the error code when a send failed. Never the path,
+  `ref`, `payment_ref`, `pay_to`, `service_id` or a payment value.
 
 ## The fake x402 seller
 
