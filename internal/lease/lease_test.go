@@ -560,3 +560,95 @@ func TestLeaseExtensionDuringTheDeadlineCheckKeepsTheLease(t *testing.T) {
 		eq(t, l.State().Deadline, later)
 	})
 }
+
+// queued is a fake lease check whose calls each wait for their own answer
+type queued struct {
+	mu    sync.Mutex
+	calls []chan CheckOut
+}
+
+func (q *queued) check(ctx context.Context, _ CheckIn) (CheckOut, error) {
+	ch := make(chan CheckOut, 1)
+	q.mu.Lock()
+	q.calls = append(q.calls, ch)
+	q.mu.Unlock()
+	select {
+	case out := <-ch:
+		return out, nil
+	case <-ctx.Done():
+		return CheckOut{}, ctx.Err()
+	}
+}
+
+// release answers the nth call, counted from 0, and waits for the table to act on it
+func (q *queued) release(t *testing.T, n int, out CheckOut) {
+	t.Helper()
+	q.mu.Lock()
+	if n >= len(q.calls) {
+		q.mu.Unlock()
+		t.Fatalf("check %d was never sent, %d were", n, len(q.calls))
+	}
+	ch := q.calls[n]
+	q.mu.Unlock()
+	ch <- out
+	synctest.Wait()
+}
+
+func (q *queued) sent() int {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return len(q.calls)
+}
+
+func TestLeaseDeadlineAnswerSentLastWinsWhicheverArrivesFirst(t *testing.T) {
+	for _, order := range [][2]int{{0, 1}, {1, 0}} {
+		synctest.Test(t, func(t *testing.T) {
+			q := &queued{}
+			table := NewTable(q.check, time.Minute, 30*time.Second)
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			go table.Run(ctx)
+			old := time.Now().Add(65 * time.Second)
+			l := table.Put("p1", State{Deadline: old, Remaining: gib})
+
+			// The periodic check goes out at 60 s, before the extension, the deadline's at 65 s
+			time.Sleep(66 * time.Second)
+			synctest.Wait()
+			eq(t, q.sent(), 2)
+			later := time.Now().Add(time.Hour)
+			answers := [2]CheckOut{
+				{States: map[string]State{"p1": {Deadline: old, Remaining: gib}}},
+				{States: map[string]State{"p1": {Deadline: later, Remaining: 7}}},
+			}
+			q.release(t, order[0], answers[order[0]])
+			q.release(t, order[1], answers[order[1]])
+			eq(t, ended(l.Context()), false)
+			eq(t, l.State(), State{Deadline: later, Remaining: 7})
+		})
+	}
+}
+
+func TestLeaseDeadlineAnswerBehindANewerPassedStateAsksAgain(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		q := &queued{}
+		table := NewTable(q.check, time.Hour, 30*time.Second)
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		go table.Run(ctx)
+		old := time.Now().Add(10 * time.Second)
+		l := table.Put("p1", State{Deadline: old, Remaining: gib})
+		time.Sleep(10 * time.Second)
+		synctest.Wait()
+		eq(t, q.sent(), 1)
+
+		// A put from an older source lands while the deadline check is out
+		table.Put("p1", State{Deadline: old, Remaining: 9})
+		later := time.Now().Add(time.Hour)
+		q.release(t, 0, CheckOut{States: map[string]State{"p1": {Deadline: later, Remaining: 7}}})
+		eq(t, ended(l.Context()), false)
+		eq(t, q.sent(), 2)
+		q.release(t, 1, CheckOut{States: map[string]State{"p1": {Deadline: later, Remaining: 6}}})
+		eq(t, ended(l.Context()), false)
+		eq(t, l.State(), State{Deadline: later, Remaining: 6})
+	})
+}

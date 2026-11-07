@@ -85,6 +85,8 @@ type Table struct {
 	onVersion func(placement string, version uint64)
 	onState   func(placement string, s State)
 	down      bool
+	// stamp numbers every local state change and every check sent, in the order they happen
+	stamp uint64
 }
 
 // Lease is one placement's context and the children that run under it
@@ -96,8 +98,8 @@ type Lease struct {
 
 	// The fields below are guarded by the table's mutex
 	state State
-	// seq counts state changes, so an answer to a check sent before the last one is not applied
-	seq      uint64
+	// stamp is the table's stamp of the lease's state, an answer applies only with a newer one
+	stamp    uint64
 	timer    *time.Timer
 	reason   string
 	children map[*child]struct{}
@@ -260,18 +262,19 @@ func (t *Table) Run(ctx context.Context) {
 	}
 }
 
-// taken is a lease as it stood when a check was sent
+// taken is a lease a check asked about, and the stamp the check was sent with
 type taken struct {
-	l   *Lease
-	seq uint64
+	l     *Lease
+	stamp uint64
 }
 
 func (t *Table) checkAll(ctx context.Context) {
 	t.mu.Lock()
 	snap := make(map[string]taken, len(t.leases))
 	ls := make([]*Lease, 0, len(t.leases))
+	t.stamp++
 	for id, l := range t.leases {
-		snap[id] = taken{l, l.seq}
+		snap[id] = taken{l, t.stamp}
 		ls = append(ls, l)
 	}
 	in := checkIn(ls)
@@ -296,24 +299,30 @@ func (t *Table) expire(l *Lease, armed time.Time) {
 		t.mu.Unlock()
 		return
 	}
-	snap := map[string]taken{l.placement: {l, l.seq}}
+	t.stamp++
+	snap := map[string]taken{l.placement: {l, t.stamp}}
 	in := checkIn([]*Lease{l})
 	t.mu.Unlock()
 
 	ctx, cancel := context.WithTimeout(context.Background(), deadlineCheck)
 	out, err := t.check(ctx, in)
 	cancel()
-	if err == nil {
-		if s, ok := out.States[l.placement]; ok && s.Deadline.After(time.Now()) {
-			t.answer(snap, out, ReasonExpired)
-			return
-		}
+	s, ok := out.States[l.placement]
+	later := err == nil && ok && s.Deadline.After(time.Now())
+	if later {
+		t.answer(snap, out, ReasonExpired)
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if t.leases[l.placement] == l && !l.state.Deadline.After(time.Now()) {
-		t.endLocked(l, ReasonExpired)
+	if t.leases[l.placement] != l || l.state.Deadline.After(time.Now()) {
+		return
 	}
+	if later {
+		// A newer state with a passed deadline won over a later one, so ask the router again
+		t.armLocked(l)
+		return
+	}
+	t.endLocked(l, ReasonExpired)
 }
 
 // answer applies a check's answer to the leases it asked about, absent ones end with absent
@@ -342,13 +351,13 @@ func (t *Table) answer(snap map[string]taken, out CheckOut, absent string) {
 			t.endLocked(l, absent)
 			continue
 		}
-		if l.seq != k.seq {
+		if k.stamp <= l.stamp {
 			continue
 		}
 		if s.SecretsVersion != l.state.SecretsVersion {
 			versions = append(versions, moved{id, s.SecretsVersion})
 		}
-		t.setLocked(l, s)
+		t.setLocked(l, s, k.stamp)
 	}
 	f := t.onVersion
 	t.mu.Unlock()
@@ -366,12 +375,13 @@ func (t *Table) moveLocked(l *Lease, s State) {
 	if s.SecretsVersion == 0 {
 		s.SecretsVersion = l.state.SecretsVersion
 	}
-	t.setLocked(l, s)
+	t.stamp++
+	t.setLocked(l, s, t.stamp)
 }
 
-// setLocked stores s, re-arms the deadline timer and ends the lease when its bytes are spent
-func (t *Table) setLocked(l *Lease, s State) {
-	l.seq++
+// setLocked stores s with its stamp, re-arms the deadline timer and ends a lease with no bytes left
+func (t *Table) setLocked(l *Lease, s State, stamp uint64) {
+	l.stamp = stamp
 	moved := !s.Deadline.Equal(l.state.Deadline) || l.timer == nil
 	l.state = s
 	if t.onState != nil {
@@ -382,12 +392,17 @@ func (t *Table) setLocked(l *Lease, s State) {
 		return
 	}
 	if moved {
-		if l.timer != nil {
-			l.timer.Stop()
-		}
-		armed := s.Deadline
-		l.timer = time.AfterFunc(time.Until(armed), func() { t.expire(l, armed) })
+		t.armLocked(l)
 	}
+}
+
+// armLocked sets the deadline timer to the lease's deadline, firing at once when it passed
+func (t *Table) armLocked(l *Lease) {
+	if l.timer != nil {
+		l.timer.Stop()
+	}
+	armed := l.state.Deadline
+	l.timer = time.AfterFunc(time.Until(armed), func() { t.expire(l, armed) })
 }
 
 func (t *Table) endLocked(l *Lease, reason string) {

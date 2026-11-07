@@ -530,8 +530,12 @@ deadline. Requests, transfers, connections and tunnels run under its children.
   held previews with `CheckEdgeLeases`. `EgressCheck` reads each secrets version from
   `CheckEgressLeases`.
 - Each check gets 10 s, so a hung one never holds up the next.
-- A late answer, to a check sent before the lease last changed, does not overwrite the newer state.
-  So it never undoes an extension. Its ends and revocations still apply, since they only cut.
+- One sequence orders every put, move and check sent. An answer applies only when its check was
+  sent after the lease's state was last set, so the answer sent last wins, whatever order the
+  answers arrive in. A late answer never undoes an extension. Its ends and revocations still
+  apply, since they only cut.
+- A deadline check whose later deadline lost to a newer state with a passed deadline asks the
+  router again at once, rather than ending the lease or leaving it without a timer.
 - `OnState` hands on every state a lease takes, from a put, a move or a check. The edge passes the
   bytes left to its usage reporter there.
 - `Apply` acts on one event: `PlacementEnded`, `DeadlineMoved`, `PreviewRevoked`, the binary's
