@@ -167,6 +167,26 @@ The ACME account key and registration live under `state_dir`, one directory per 
 URL, so runs never register a new account and staging never mixes with production. Switching
 `dns_provider` to any lego provider, with its variables in `dns_env`, changes no code.
 
+### The dev wildcard on the Mac
+
+Before the production deploy, the edges run on the Mac behind the VPS (DP 15.6). The dev
+wildcard `*.preview.dev.<domain>` comes from `bugnet-certs` on the VPS, into
+`/var/lib/bugnet-certs/preview-dev/` (bugnet-router's `deploy/vps/front.sh` sets it up). Copy the
+pair to the Mac with:
+
+```sh
+make dev-certs VPS=<user>@<host> [VPS_SSH_PORT=<port>]
+```
+
+- It copies `fullchain.pem` and `key.pem` with one `scp` over the admin SSH, into
+  `~/.local/state/bugnet-dev/preview-dev/`, which is outside every repository. The directory is
+  0700 and both files 0600. `DEV_CERTS_DIR=<dir>` copies elsewhere.
+- `VPS_SSH_PORT` is 2222 by default, admin SSH's port under DP question 1 (a). Under (b) it is 22.
+- `<user>` must be the admin user `front.sh` ran as with sudo, since the directory belongs to
+  that user's group. Anyone else cannot read `key.pem`.
+- The DNS token never leaves the VPS. Run it again after each renewal. The dev edge's
+  `[acme] wildcard_dir` points at the directory and picks the new pair up within a minute.
+
 ## Calling the router
 
 `internal/routerclient` gives two `*http.Client`s for the Connect clients from `bugnet-proto`. Both
