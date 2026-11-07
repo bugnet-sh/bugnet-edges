@@ -217,7 +217,7 @@ func TestTwoProcessesNeverOverwrite(t *testing.T) {
 	eq(t, ownOf(restarted, "pl_a", unpaidHost), Unpaid{13, 1300})
 }
 
-// fakeEgressClient records each ReportEgressUsage request
+// fakeEgressClient records each ReportEgressUsage request sent on a live context
 type fakeEgressClient struct {
 	routerv1connect.EgressServiceClient
 	reqs chan *routerv1.ReportEgressUsageRequest
@@ -225,8 +225,12 @@ type fakeEgressClient struct {
 }
 
 func (f *fakeEgressClient) ReportEgressUsage(
-	_ context.Context, r *connect.Request[routerv1.ReportEgressUsageRequest],
+	ctx context.Context, r *connect.Request[routerv1.ReportEgressUsageRequest],
 ) (*connect.Response[routerv1.ReportEgressUsageResponse], error) {
+	// A real client sends nothing on a context that has ended
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	f.reqs <- r.Msg
 	if f.err != nil {
 		return nil, f.err
@@ -303,6 +307,36 @@ func TestRunReportsEvery5s(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
 		c.RunReports(ctx, failSend, time.Hour)
+		eq(t, plain(c.Take()), map[string]map[string]Unpaid{"pl_a": {unpaidHost: {2, 20}}})
+	})
+
+	t.Run("a last send the router never answers ends within the interval", func(t *testing.T) {
+		live := make(chan bool, 1)
+		send := func(ctx context.Context, _ map[string]*routerv1.X402UnpaidByHost) error {
+			live <- ctx.Err() == nil
+			<-ctx.Done()
+			return ctx.Err()
+		}
+		c := NewCounters()
+		add(c, "pl_a", unpaidHost, 2, 10)
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		done := make(chan struct{})
+		go func() {
+			c.RunReports(ctx, send, 50*time.Millisecond)
+			close(done)
+		}()
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Fatal("the last send held RunReports past a second")
+		}
+		select {
+		case l := <-live:
+			eq(t, l, true)
+		default:
+			t.Fatal("no last send")
+		}
 		eq(t, plain(c.Take()), map[string]map[string]Unpaid{"pl_a": {unpaidHost: {2, 20}}})
 	})
 
