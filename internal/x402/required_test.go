@@ -245,7 +245,7 @@ func TestEncodeRequired(t *testing.T) {
 		{Scheme: "upto", Network: SolanaMainnet, Asset: USDCMint, PayTo: otherPay},
 	}}
 	extra := map[string]any{"feePayer": otherPay, "memo": "m"}
-	h := EncodeRequired(want, extra)
+	h := EncodeRequired(want, "https://api.example.com/v1/search", extra)
 	got, code := ParseRequired([]string{h}, requiredMax)
 	eq(t, code, Code(""))
 	eq(t, got, want)
@@ -255,20 +255,25 @@ func TestEncodeRequired(t *testing.T) {
 		t.Fatal(err)
 	}
 	var doc struct {
-		Accepts []map[string]any `json:"accepts"`
+		Resource map[string]any   `json:"resource"`
+		Accepts  []map[string]any `json:"accepts"`
 	}
 	if err := json.Unmarshal(raw, &doc); err != nil {
 		t.Fatal(err)
 	}
+	eq(t, doc.Resource, map[string]any{
+		"url": "https://api.example.com/v1/search", "description": "", "mimeType": "",
+	})
 	eq(t, doc.Accepts[0]["amount"], any("10000"))
 	eq(t, doc.Accepts[0]["extra"], any(map[string]any{"feePayer": otherPay, "memo": "m"}))
 	eq(t, doc.Accepts[0]["maxTimeoutSeconds"], any(float64(60)))
 	_, hasAmount := doc.Accepts[1]["amount"]
 	eq(t, hasAmount, false)
 
-	plain := EncodeRequired(Required{Version: 1}, nil)
+	plain := EncodeRequired(Required{Version: 1}, "https://seller.test/ok/x", nil)
 	raw, _ = base64.StdEncoding.DecodeString(plain)
-	eq(t, string(raw), `{"x402Version":1,"accepts":[]}`)
+	eq(t, string(raw), `{"x402Version":1,"resource":{"url":"https://seller.test/ok/x",`+
+		`"description":"","mimeType":""},"accepts":[]}`)
 }
 
 func TestEncodeRequiredPanicsOnExtraJSONCannotHold(t *testing.T) {
@@ -277,7 +282,8 @@ func TestEncodeRequiredPanicsOnExtraJSONCannotHold(t *testing.T) {
 			t.Error("an extra holding a channel did not panic")
 		}
 	}()
-	EncodeRequired(Required{Version: 2, Accepts: []Entry{{}}}, map[string]any{"c": make(chan int)})
+	EncodeRequired(Required{Version: 2, Accepts: []Entry{{}}}, "https://seller.test/ok/x",
+		map[string]any{"c": make(chan int)})
 }
 
 func TestParseV1Body(t *testing.T) {

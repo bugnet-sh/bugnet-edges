@@ -147,12 +147,23 @@ type wireEntry struct {
 	Extra             map[string]any `json:"extra,omitempty"`
 }
 
-// EncodeRequired builds a header value with extra in every entry, for the fake seller and tests
-func EncodeRequired(r Required, extra map[string]any) string {
+// wireResource is the resource a 402 protects, as the reference x402 server writes it
+type wireResource struct {
+	URL         string `json:"url"`
+	Description string `json:"description"`
+	MimeType    string `json:"mimeType"`
+}
+
+// EncodeRequired builds a header value for a resource URL, extra in every entry, for fake sellers
+func EncodeRequired(r Required, resource string, extra map[string]any) string {
 	w := struct {
-		Version int         `json:"x402Version"`
-		Accepts []wireEntry `json:"accepts"`
-	}{Version: r.Version, Accepts: make([]wireEntry, 0, len(r.Accepts))}
+		Version  int          `json:"x402Version"`
+		Resource wireResource `json:"resource"`
+		Accepts  []wireEntry  `json:"accepts"`
+	}{
+		Version: r.Version, Resource: wireResource{URL: resource},
+		Accepts: make([]wireEntry, 0, len(r.Accepts)),
+	}
 	for _, e := range r.Accepts {
 		we := wireEntry{
 			Scheme: e.Scheme, Network: e.Network, Asset: e.Asset, PayTo: e.PayTo,
