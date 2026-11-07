@@ -128,6 +128,26 @@ func TestRunClosesTheMinute(t *testing.T) {
 	eq(t, s.next(t).GetEvents()[0].GetCount(), uint32(2))
 }
 
+func TestRunFlushesAtTheMinuteClose(t *testing.T) {
+	eq(t, untilMinute(eventAt(0)), time.Minute)
+	eq(t, untilMinute(eventAt(59).Add(900*time.Millisecond)), 100*time.Millisecond)
+
+	e, s, _, _ := newTestEvents(t)
+	for i := range 3 {
+		e.Add("pl_a", eventCall(EventFree, "", eventAt(5+i)))
+	}
+	// The clock runs in real time from 500 ms before the minute ends, and nothing ticks
+	start := time.Now()
+	e.now = func() time.Time { return eventAt(59).Add(500*time.Millisecond + time.Since(start)) }
+	runEvents(t, e)
+	b := s.next(t)
+	var counts []uint32
+	for _, ev := range b.GetEvents() {
+		counts = append(counts, ev.GetCount())
+	}
+	eq(t, counts, []uint32{1, 2})
+}
+
 func TestBatchesHoldAtMost50(t *testing.T) {
 	e, s, clk, _ := newTestEvents(t)
 	for i := range 55 {
