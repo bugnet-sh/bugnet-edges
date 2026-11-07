@@ -177,9 +177,54 @@ func TestDropDummyKey(t *testing.T) {
 		eq(t, h, http.Header{"Authorization": {v}})
 	}
 
-	two := http.Header{"Authorization": {"Bearer x402", "Bearer sk-live"}}
-	eq(t, DropDummyKey(two), false)
-	eq(t, two, http.Header{"Authorization": {"Bearer x402", "Bearer sk-live"}})
+	cases := []struct {
+		name    string
+		in, out http.Header
+		dropped bool
+	}{
+		{
+			"dummy first",
+			http.Header{"Authorization": {"Bearer x402", "Bearer sk-live"}},
+			http.Header{"Authorization": {"Bearer sk-live"}},
+			true,
+		},
+		{
+			"dummy last",
+			http.Header{"Authorization": {"Basic dTpw", "bearer x402"}},
+			http.Header{"Authorization": {"Basic dTpw"}},
+			true,
+		},
+		{
+			"dummy twice",
+			http.Header{"Authorization": {"Bearer x402", "BEARER x402"}, "Accept": {"*/*"}},
+			http.Header{"Accept": {"*/*"}},
+			true,
+		},
+		{
+			"two spellings",
+			http.Header{"Authorization": {"Bearer sk-live"}, "authorization": {"Bearer x402"}},
+			http.Header{"Authorization": {"Bearer sk-live"}},
+			true,
+		},
+		{
+			"no dummy among two",
+			http.Header{"Authorization": {"Bearer X402", "Basic x402"}},
+			http.Header{"Authorization": {"Bearer X402", "Basic x402"}},
+			false,
+		},
+		{
+			"one line holding two",
+			http.Header{"Authorization": {"Bearer x402, Bearer sk-live"}},
+			http.Header{"Authorization": {"Bearer x402, Bearer sk-live"}},
+			false,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			eq(t, DropDummyKey(c.in), c.dropped)
+			eq(t, c.in, c.out)
+		})
+	}
 
 	none := http.Header{"Accept": {"*/*"}}
 	eq(t, DropDummyKey(none), false)

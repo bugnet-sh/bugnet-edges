@@ -2,6 +2,7 @@ package x402
 
 import (
 	"net/http"
+	"slices"
 	"strings"
 
 	"golang.org/x/net/http/httpguts"
@@ -80,20 +81,29 @@ func IsUpgrade(r *http.Request) bool {
 	return httpguts.HeaderValuesContainsToken(values(r.Header, "connection"), "upgrade")
 }
 
-// DropDummyKey deletes Authorization when it is exactly Bearer x402, scheme in any case
+// DropDummyKey deletes each Authorization value that is exactly Bearer x402, scheme in any case
 func DropDummyKey(h http.Header) bool {
-	vs := values(h, "authorization")
-	if len(vs) != 1 {
-		return false
-	}
-	scheme, token, ok := strings.Cut(vs[0], " ")
-	if !ok || token != "x402" || !strings.EqualFold(scheme, "bearer") {
-		return false
-	}
-	for k := range h {
-		if strings.EqualFold(k, "authorization") {
+	dropped := false
+	for k, vs := range h {
+		if strings.ToLower(k) != "authorization" {
+			continue
+		}
+		kept := slices.DeleteFunc(slices.Clone(vs), isDummyKey)
+		if len(kept) == len(vs) {
+			continue
+		}
+		dropped = true
+		if len(kept) == 0 {
 			delete(h, k)
+		} else {
+			h[k] = kept
 		}
 	}
-	return true
+	return dropped
+}
+
+// isDummyKey is the placeholder key, one space and the token case-sensitive
+func isDummyKey(v string) bool {
+	scheme, token, ok := strings.Cut(v, " ")
+	return ok && token == "x402" && strings.EqualFold(scheme, "bearer")
 }
