@@ -119,6 +119,9 @@ func TestJSONErrors(t *testing.T) {
 		{ChecksumMismatch, 422, "checksum_mismatch", ""},
 		{NoSpace, 507, "no_space", ""},
 		{Unavailable, 503, "unavailable", "2"},
+		{MethodNotAllowed, 405, "method", ""},
+		{ContentRange, 400, "content_range", ""},
+		{TooManyTransfers, 429, "too_many_transfers", "10"},
 	} {
 		w := writeJSON(tc.code)
 		eq(t, w.Code, tc.status)

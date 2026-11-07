@@ -46,6 +46,13 @@ var (
 		message: "The sandbox's disk is full."}
 	Unavailable = Code{status: 503, code: "unavailable",
 		message: "Try again shortly.", retryAfter: 2 * time.Second}
+	MethodNotAllowed = Code{status: 405, code: "method",
+		message: "This link takes PUT for an upload, or GET and HEAD for a download."}
+	ContentRange = Code{status: 400, code: "content_range",
+		message: "An upload sends the whole file in one request, without Content-Range."}
+	TooManyTransfers = Code{status: 429, code: "too_many_transfers",
+		message:    "This sandbox runs as many transfers as it may. Try again when one ends.",
+		retryAfter: 10 * time.Second}
 )
 
 // allCodes lists every code, for tests
@@ -53,6 +60,7 @@ func allCodes() []Code {
 	return []Code{
 		TokenUnknown, TokenUsed, TokenExpired, SandboxEnded, TrafficLimit, RateLimited, InUse,
 		SizeMismatch, OverCap, FileChanged, Range, ChecksumMismatch, NoSpace, Unavailable,
+		MethodNotAllowed, ContentRange, TooManyTransfers,
 	}
 }
 
