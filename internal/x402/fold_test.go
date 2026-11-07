@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -323,13 +324,27 @@ func TestAddKeepsItsOwnCopy(t *testing.T) {
 	clk.set(eventAt(9))
 	e.Add("pl_a", noAt)
 
+	// Refs of 16 characters with one outside a-z and 2-7
+	bad := []string{"ABCDEFGHIJKLMNOP", "0000000000000000", "abcdefghijklmno1",
+		"abcdefghijklmno8", "abcdefghijklmn-z"}
+	for i, ref := range bad {
+		ev := eventCall(EventFree, "", eventAt(7))
+		ev.Ref, ev.ServiceId = ref, fmt.Sprintf("xs_bad%013d", i)
+		e.Add("pl_a", ev)
+	}
+
 	got := flushed(t, e, s, "pl_a")
-	eq(t, len(got), 3)
+	eq(t, len(got), 3+len(bad))
 	eq(t, got[0].GetHost(), eventHost)
 	eq(t, got[0].GetCount(), uint32(1))
-	eq(t, isRef(got[0].GetRef()), true)
 	eq(t, got[1].GetRef(), kept.GetRef())
 	eq(t, got[2].GetAt().AsTime(), eventAt(9))
+	refShape := regexp.MustCompile(`^[a-z2-7]{16}$`)
+	for i, ev := range append([]*routerv1.X402Event{got[0]}, got[3:]...) {
+		if !refShape.MatchString(ev.GetRef()) || (i > 0 && ev.GetRef() == bad[i-1]) {
+			t.Fatalf("Add kept the ref %q", ev.GetRef())
+		}
+	}
 }
 
 func TestIdlePlacementsForgotten(t *testing.T) {
