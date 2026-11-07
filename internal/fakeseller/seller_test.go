@@ -547,6 +547,20 @@ func TestKeptForgetsTheOldest(t *testing.T) {
 	eq(t, len(k.m), 2)
 }
 
+func TestKeptForgetKeepsTheRest(t *testing.T) {
+	k := newKept[string, int](2)
+	k.put("a", 1)
+	k.put("b", 2)
+	k.forget("b")
+	k.put("c", 3)
+	for key, want := range map[string]int{"a": 1, "c": 3} {
+		v, ok := k.get(key)
+		eq(t, v, want)
+		eq(t, ok, true)
+	}
+	eq(t, k.order, []string{"a", "c"})
+}
+
 func TestSellerKeepsAtMostItsLimit(t *testing.T) {
 	ledger := InMemory()
 	c := config(ledger)

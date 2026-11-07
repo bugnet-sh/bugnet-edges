@@ -208,6 +208,7 @@ func TestSettingsRefused(t *testing.T) {
 		lines []string
 	}{
 		{"listen", []string{`listen = "nowhere"`}},
+		{"or acme_hosts", []string{`tls_cert_file = ""`, `tls_key_file = ""`}},
 		{"tls_key_file", []string{`tls_key_file = ""`}},
 		{"acme_hosts", []string{`acme_hosts = ["seller.example.com"]`, `acme_dir = "/tmp/a"`}},
 		{"acme_dir", []string{`tls_cert_file = ""`, `tls_key_file = ""`,
