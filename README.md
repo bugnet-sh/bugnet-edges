@@ -16,6 +16,7 @@ local and mainnet test runs, never deployed with them.
 | `cmd/bugnet-certs` | Renews the preview wildcards by DNS-01 and checks every served certificate |
 | `cmd/x402-fake-seller` | The fake x402 seller over TLS, settling to a chain or a facilitator |
 | `internal/edge` | Both roles' settings, listeners, host routing, HSTS and drain |
+| `internal/edge/transfer` | The transfer route, uploads and downloads relayed through the router |
 | `internal/pages` | The edge's own HTML pages and the transfer route's JSON errors |
 | `internal/certs` | `bugnet-certs`' settings, renewal, writing by rename and the expiry alert |
 | `internal/certmetric` | `edge_cert_days_left` and `edge_cert_issued` for any TLS config |
@@ -99,8 +100,8 @@ The edge routes by the `Host` header. Anything else gets the 404 page.
 | `<transfer_host>` | `/<token>` and `/<token>/<name>` | Transfers |
 | `<hooks_host>` | `POST /hooks/<provider>/<secret>` | Hooks. `<provider>` is 1 to 16 of `a-z0-9` |
 
-- A route without a handler yet serves the 404 page. Later tasks plug in previews, transfers and
-  hooks through `edge.Deps`.
+- A route without a handler yet serves the 404 page. Transfers are served. Later tasks plug in
+  previews and hooks through `edge.Deps`.
 - A request whose `Host` belongs to another route than its TLS name gets 421, so the browser
   opens its own connection. That keeps transfers on HTTP/1.1 and within their per-address
   connection limit. Previews may share a connection, since one wildcard covers them all.
@@ -121,6 +122,69 @@ The edge routes by the `Host` header. Anything else gets the 404 page.
 - net/http's own messages reach the log at warn level, and a handler's panic at error level. The
   noise any stranger can cause, such as a failed TLS handshake or a bad HTTP/2 preface or frame,
   logs at debug level.
+
+### Transfers
+
+`internal/edge/transfer` serves `https://<transfer_host>/<token>` (DP 8.3). A `/<name>` after the
+token is ignored. `PUT` uploads, `GET` downloads and `HEAD` describes a download without claiming
+it. Errors are JSON, `{"error": "<code>", "message": "..."}`.
+
+Before the router is asked:
+
+| Check | Answer |
+| --- | --- |
+| The address holds `max_connections_per_ip` (16) requests already | 429 `rate_limited` |
+| Another method | 405 `method`, with `Allow: GET, HEAD, PUT` |
+| `Content-Range` on `PUT` | 400 `content_range` |
+| Not `bnx_` and 43 base64url characters, or failed in the last 10 s | 404 `token_unknown` |
+| The address is marked and asked the router in the last second | 429 `rate_limited` |
+
+- A token the router does not know counts against the address. Past `token_failures_per_minute`
+  (20) the address is marked for 10 minutes, and its unknown tokens get 429 with
+  `Retry-After: 600`. A token that resolves always works.
+- `OpenTransfer` runs on the shared router connection. Each `ReadTransfer` and `WriteTransfer`
+  gets its own HTTP/1.1 connection, so a stalled transfer stalls no other.
+- The placement's lease holds each transfer. The lease's end, a spent budget or the URL's hard
+  stop cuts it at once. A blocked read or write on the client returns then too.
+
+Uploads:
+
+- `OpenTransfer` runs before the body is read, so with `Expect: 100-continue` a bad, used or
+  expired token is refused before the file is sent.
+- A `Content-Length` other than the URL's size gets 413 when larger and 400 when smaller, before
+  the body is read. A chunked body must total the size exactly, the same two answers otherwise.
+  A size of 0 takes `Content-Length: 0` or an empty chunked body.
+- The first message to the router carries the transfer id and lease, then the body follows in
+  messages of up to `chunk` (256 KiB). A read that comes back short is sent at once, so a slow
+  client still shows progress to the router.
+- Only a body of exactly the size ends with a clean close, which lets the router commit. Every
+  other end cancels the stream, so the router aborts. The answer is 200 with
+  `{"path": "...", "size": N, "sha256": "<hex>"}`.
+- A client that moves nothing for `idle_timeout` (60 s), or leaves, has its connection cut.
+
+Downloads:
+
+| Request | Answer |
+| --- | --- |
+| No `Range`, several ranges, another unit or a bad one | 200, the whole file |
+| `bytes=a-`, `bytes=a-b` or `bytes=-n` within the file | 206 with `Content-Range` |
+| A range starting at or past the end | 416 `range`, `Content-Range: bytes */<size>` |
+| `If-Range` with another validator | 200, the whole file |
+
+- Every answer carries `Content-Length`, the strong `ETag`, `Accept-Ranges: bytes`,
+  `Content-Type: application/octet-stream`, `nosniff`, `Content-Security-Policy: sandbox;
+  default-src 'none'`, `no-store`, `no-referrer`, `Content-Disposition: attachment` with the
+  file name less its control characters, and `X-Bugnet-Sha256` when the URL was made with
+  `want_sha256`.
+- The last data message waits for the router's `verified`. On any other end the connection is
+  cut, so `curl` sees a short transfer and `curl -C -` resumes, never a mixed file. A router
+  refusal before the first byte is answered as JSON instead.
+- A refused range frees its claim at once, with a read the router refuses.
+- Downloads answer `Connection: close`, and an upload answered before its body's end does too.
+
+Bytes count after TLS, toward the sandbox for uploads and from it for downloads, paced by the
+placement's lane. Logs name a transfer only by the first 8 hex characters of its token's SHA-256,
+never the token or the path.
 
 ### Drain
 

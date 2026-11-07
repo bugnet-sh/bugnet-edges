@@ -27,7 +27,7 @@ boat_requests_per_minute = 5000       # edge-wide toward Boat, 0 = off after the
 
 [transfers]
 chunk = "256KiB"                      # edge to router message size
-idle_timeout = "60s"
+idle_timeout = "60s"                  # a transfer whose client moves nothing this long is cut
 token_failures_per_minute = 20        # per client IP, then 429 for 10 minutes, 0 is no limit
 max_connections_per_ip = 16
 

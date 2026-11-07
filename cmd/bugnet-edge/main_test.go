@@ -18,6 +18,7 @@ import (
 	"math/big"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -27,7 +28,11 @@ import (
 	"testing"
 	"time"
 
+	"connectrpc.com/connect"
+	routerv1 "github.com/oynozan/bugnet-proto/gen/go/bugnet/router/v1"
+	"github.com/oynozan/bugnet-proto/gen/go/bugnet/router/v1/routerv1connect"
 	pp "github.com/pires/go-proxyproto"
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
 )
 
 // TestMain runs main itself when a test starts this binary as bugnet-edge
@@ -170,6 +175,7 @@ func TestUsage(t *testing.T) {
 func TestEdgeRoleServesTheLandingPage(t *testing.T) {
 	tlsAddr, metrics := freePort(t), freePort(t)
 	path := writeFile(t, fmt.Sprintf(`
+router_url = "http://%s"
 tls_listen_addr = %q
 redirect_listen_addr = ""
 metrics_listen_addr = %q
@@ -183,8 +189,8 @@ abuse_contact = "abuse@example.test"
 [acme]
 enabled = false
 static_dir = %q
-`, tlsAddr, metrics, pairDir(t, "preview.example.test", "transfer.example.test",
-		"hooks.example.test", "*.preview.example.test")))
+`, fakeRouter(t), tlsAddr, metrics, pairDir(t, "preview.example.test",
+		"transfer.example.test", "hooks.example.test", "*.preview.example.test")))
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
 	go func() { done <- run(ctx, quiet(), []string{"-config", path}, secrets) }()
@@ -193,14 +199,54 @@ static_dir = %q
 	if code != 200 || !strings.Contains(body, "mailto:abuse@example.test") {
 		t.Fatalf("%d\n%s", code, body)
 	}
-	code, _ = fetchTLS(t, tlsAddr, "transfer.example.test", "/bnx_abc")
-	if code != 404 {
-		t.Fatalf("an unbuilt route answered %d", code)
+	code, body = fetchTLS(t, tlsAddr, "transfer.example.test", "/bnx_abc")
+	if code != 404 || !strings.Contains(body, "token_unknown") {
+		t.Fatalf("a malformed transfer token answered %d\n%s", code, body)
+	}
+	code, body = fetchTLS(t, tlsAddr, "transfer.example.test", "/"+usedToken)
+	if code != 410 || !strings.Contains(body, "token_used") {
+		t.Fatalf("a used transfer token answered %d\n%s", code, body)
 	}
 	cancel()
 	if err := <-done; err != nil {
 		t.Fatal(err)
 	}
+}
+
+// usedToken is the one transfer token the fake router knows, as used
+var usedToken = "bnx_" + strings.Repeat("A", 43)
+
+// usedRouter answers OpenTransfer with TOKEN_USED for usedToken and leaves the rest unbuilt
+type usedRouter struct {
+	routerv1connect.UnimplementedEdgeServiceHandler
+}
+
+func (usedRouter) OpenTransfer(
+	_ context.Context, req *connect.Request[routerv1.OpenTransferRequest],
+) (*connect.Response[routerv1.OpenTransferResponse], error) {
+	reason := "TOKEN_UNKNOWN"
+	code := connect.CodeNotFound
+	if req.Msg.GetToken() == usedToken {
+		reason, code = "TOKEN_USED", connect.CodeFailedPrecondition
+	}
+	ce := connect.NewError(code, errors.New(reason))
+	d, _ := connect.NewErrorDetail(&errdetails.ErrorInfo{Reason: reason, Domain: "bugnet.router"})
+	ce.AddDetail(d)
+	return nil, ce
+}
+
+// fakeRouter serves usedRouter over h2c until the test ends and answers its host and port
+func fakeRouter(t *testing.T) string {
+	t.Helper()
+	mux := http.NewServeMux()
+	mux.Handle(routerv1connect.NewEdgeServiceHandler(usedRouter{}))
+	srv := httptest.NewUnstartedServer(mux)
+	srv.Config.Protocols = new(http.Protocols)
+	srv.Config.Protocols.SetHTTP1(true)
+	srv.Config.Protocols.SetUnencryptedHTTP2(true)
+	srv.Start()
+	t.Cleanup(srv.Close)
+	return srv.Listener.Addr().String()
 }
 
 func TestSecretsRoleStartsWithItsOwnSettings(t *testing.T) {
@@ -283,6 +329,7 @@ func readyz(metrics string) int {
 func TestSecondSignalKillsDuringTheDrain(t *testing.T) {
 	tlsAddr, metrics := freePort(t), freePort(t)
 	path := writeFile(t, fmt.Sprintf(`
+router_url = "http://%s"
 tls_listen_addr = %q
 redirect_listen_addr = ""
 metrics_listen_addr = %q
@@ -296,8 +343,8 @@ abuse_contact = "abuse@example.test"
 [acme]
 enabled = false
 static_dir = %q
-`, tlsAddr, metrics, pairDir(t, "preview.example.test", "transfer.example.test",
-		"hooks.example.test", "*.preview.example.test")))
+`, freePort(t), tlsAddr, metrics, pairDir(t, "preview.example.test",
+		"transfer.example.test", "hooks.example.test", "*.preview.example.test")))
 	cmd := exec.Command(os.Args[0], "-config", path)
 	cmd.Env = append(os.Environ(), "BUGNET_EDGE_TEST_MAIN=1")
 	for _, name := range []string{"BUGNET_EDGE_TOKEN", "BUGNET_HOOK_PATH_SECRET"} {
