@@ -32,6 +32,7 @@ The binaries are `bugnet-edge` (also run as `bugnet-secrets`), `bugnet-ssh`, `bu
 | `internal/lease` | One context per placement that ends at its deadline, end or spent budget |
 | `internal/x402` | `[x402]` settings, refusals, dollar text, headers, paths, 402s, bodies, cache |
 | `internal/x402/x402test` | A test CA in the `mtls init --dev` layout and a fake Payments signer |
+| `internal/fakeseller` | The fake x402 seller of XS 11.2 and an in-memory settler |
 
 ## Listeners
 
@@ -231,6 +232,52 @@ send the caller's token only to the router URL and never follow a redirect.
   connections, which close after 90 s with no call.
 - From 30 days before egress's certificate expires, `Run` logs one error line a day. It names the
   file and the days left.
+
+## The fake x402 seller
+
+`fakeseller.New` serves the fake seller of XS 11.2 as an `http.Handler`. Egress tests run it in
+process. The path prefix picks the mode. A `Settler` completes each payment: `fakeseller.InMemory`
+takes the fixed test format of the fake Payments in `x402test` and needs no chain.
+
+| Prefix | First send | Paid retry |
+| --- | --- | --- |
+| `/ok/`, `/cents/`, `/cent/` | 402 at $0.001, $0.02 or $0.01 | Settles, 200 with `success: true` |
+| `/bait/` | 402 at $10 | As `/ok/` |
+| `/switch/` | 402 with a new made-up `payTo` each time | As `/ok/` |
+| `/splits/` | 402 with `extra.splits` | As `/ok/` |
+| `/upfront/` | 402 with `extra.paymentFlow` `upfront` | As `/ok/` |
+| `/ata/` | 402 with `extra.ataCreationRequired` | As `/ok/` |
+| `/upto/`, `/escrow/` | 402 in that scheme | As `/ok/` |
+| `/feepayer-bugnet/` | 402 naming `BugnetFeePayer` as fee payer | As `/ok/` |
+| `/memo/`, `/memo-long/<n>/` | 402 with a memo of 32 bytes, or of `n` from 33 to 256 | As `/ok/` |
+| `/hints/` | 402 with a blockhash hint and `lastValidBlockHeight` 1 | As `/ok/` |
+| `/late/` | 402 | 200 with `success: false`, settles `Late` later |
+| `/lie/` | 402 | 200 with `success: true` and a made-up transaction, never settles |
+| `/silent/` | 402 | Settles, 200 with no `PAYMENT-RESPONSE` |
+| `/settle500/`, `/settle429/` | 402 | Settles, then 500 or 429 |
+| `/settle500-wait/`, `/settle429-wait/` | 402 | As their bases, with `Retry-After: 15` |
+| `/reject/` | 402 | A new 402 |
+| `/slow/` | 402 | Waits `Slow`, settles, then 200, settling even when the caller left |
+| `/stall/` | 402 after `Stall` | As `/ok/` |
+| `/pid/` | 402 offering `payment-identifier` | As `/ok/`, a repeat answered from its cache |
+| `/echo/` | 402 | As `/ok/`, request headers echoed as `Echo-<name>` and in the body |
+| `/redirect/` | 402 | Settles, then a 302 to `RedirectTo` |
+| `/post400/` | 400 to a POST with an empty body, else 402 | As `/ok/` |
+| `/v1only/` | 402 with only an x402 v1 body | The same 402 |
+| `/base/` | 402 offering only `eip155:8453` | As `/ok/` |
+| `/free/` | 200 | None |
+| `/hold/<seconds>/` | 200 after `seconds` times `Second`, 1 to 300, no byte before | None |
+| `/sse/` | One event every `SSEEvery` for `SSEFor`, each flushed at once | None |
+
+- Prices the XS 11.2 table does not name are $0.01. Every 402 is x402 v2 with one `accepts`
+  entry, exact USDC on Solana with `extra.feePayer`, unless the mode says otherwise.
+- The 402 comes before the seller reads the body, as x402 middleware does. Only `/post400/`
+  reads it first. A paid answer reads it and gives its length and SHA-256.
+- A payment passes when its `accepted` equals an entry the seller offered on that prefix. A
+  payload seen before gets a new 402, except on `/pid/`.
+- `/echo/`'s body gives `PAYMENT-SIGNATURE` only as its SHA-256, so no payload reaches a body.
+- With `TestToken` set, `GET /__test/payloads` and `GET /__test/settled` list the payloads
+  received and the signatures settled, for that bearer token only. Without it they are 404.
 
 ## Traffic
 
