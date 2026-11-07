@@ -1,6 +1,7 @@
 package x402
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"regexp"
 )
@@ -8,11 +9,11 @@ import (
 // HintKind is what the seller's PAYMENT-RESPONSE says
 type HintKind int
 
-// The values of HintKind, XS 6.12's hints
+// The values of HintKind, absent first so a Hint built by hand reads as uncertain
 const (
-	HintSuccess HintKind = iota
+	HintAbsent HintKind = iota
+	HintSuccess
 	HintFailure
-	HintAbsent
 )
 
 // responseMax is the largest PAYMENT-RESPONSE egress reads, XS 6.12
@@ -20,6 +21,11 @@ const responseMax = 4 << 10
 
 // errorReason is the shape a seller's errorReason must have to reach Payments
 var errorReason = regexp.MustCompile(`^[a-z_]{1,64}$`)
+
+// hintEncodings are every base64 form, lenient since Payments decides money from the chain
+var hintEncodings = []*base64.Encoding{
+	base64.StdEncoding, base64.RawStdEncoding, base64.URLEncoding, base64.RawURLEncoding,
+}
 
 // Hint is the seller's PAYMENT-RESPONSE, shape-checked
 type Hint struct {
@@ -33,7 +39,7 @@ func ParseResponse(values []string) Hint {
 	if len(values) != 1 || len(values[0]) > responseMax {
 		return Hint{Kind: HintAbsent}
 	}
-	top, ok := decodeObject(values[0])
+	top, ok := decodeObject(values[0], hintEncodings...)
 	if !ok {
 		return Hint{Kind: HintAbsent}
 	}

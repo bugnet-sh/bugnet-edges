@@ -64,8 +64,6 @@ func TestParseResponse(t *testing.T) {
 		{"not json", settled(`{`), Hint{Kind: HintAbsent}},
 		{"an array", settled(`[true]`), Hint{Kind: HintAbsent}},
 		{"raw json", []string{`{"success":true}`}, Hint{Kind: HintAbsent}},
-		{"url alphabet", []string{base64.URLEncoding.EncodeToString(
-			[]byte(`{"success":true,"errorReason":"???~~~"}`))}, Hint{Kind: HintAbsent}},
 	}
 	for _, c := range cases {
 		if got := ParseResponse(c.values); got != c.want {
@@ -74,4 +72,48 @@ func TestParseResponse(t *testing.T) {
 	}
 
 	eq(t, ParseResponse(padResponse(t, 4<<10)), Hint{Kind: HintSuccess})
+}
+
+func TestParseResponseBase64Forms(t *testing.T) {
+	raw := []byte(`{"success":false,"errorReason":"late","pad":"???~~~"}`)
+	padded := base64.StdEncoding.EncodeToString(raw)
+	if !strings.HasSuffix(padded, "=") || !strings.Contains(padded, "+") ||
+		!strings.Contains(padded, "/") {
+		t.Fatal("the hint must encode with padding, + and /")
+	}
+	want := Hint{Kind: HintFailure, Error: "late"}
+	for name, enc := range map[string]*base64.Encoding{
+		"padded":       base64.StdEncoding,
+		"unpadded":     base64.RawStdEncoding,
+		"url alphabet": base64.URLEncoding,
+		"url unpadded": base64.RawURLEncoding,
+	} {
+		if got := ParseResponse([]string{enc.EncodeToString(raw)}); got != want {
+			t.Errorf("%s gives %+v, want %+v", name, got, want)
+		}
+	}
+
+	// The last character before the padding with a stray low bit set
+	last := strings.TrimRight(padded, "=")
+	loose := last[:len(last)-1] + string(last[len(last)-1]+1) + padded[len(last):]
+	badUTF8 := base64.StdEncoding.EncodeToString([]byte("{\"success\":true,\"x\":\"\xff\"}"))
+	for name, v := range map[string]string{
+		"mixed alphabets":  strings.Replace(base64.URLEncoding.EncodeToString(raw), "-", "+", 1),
+		"trailing newline": padded + "\n",
+		"inner newline":    padded[:8] + "\r\n" + padded[8:],
+		"leading space":    " " + padded,
+		"loose pad bits":   loose,
+		"loose unpadded":   strings.TrimRight(loose, "="),
+		"bad utf-8":        badUTF8,
+		"bangs":            "!!!",
+		"empty":            "",
+	} {
+		if got := ParseResponse([]string{v}); got != (Hint{Kind: HintAbsent}) {
+			t.Errorf("%s gives %+v, want absent", name, got)
+		}
+	}
+}
+
+func TestZeroHintIsAbsent(t *testing.T) {
+	eq(t, Hint{}.Kind, HintAbsent)
 }

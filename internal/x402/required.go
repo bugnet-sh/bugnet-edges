@@ -44,7 +44,8 @@ func ParseRequired(values []string, limit int64) (Required, Code) {
 	if len(values) != 1 || int64(len(values[0])) > limit {
 		return Required{}, CodeNotX402
 	}
-	top, ok := decodeObject(values[0])
+	// Only padded standard base64, so egress never passes Payments a header Payments refuses
+	top, ok := decodeObject(values[0], base64.StdEncoding)
 	if !ok {
 		return Required{}, CodeNotX402
 	}
@@ -64,18 +65,22 @@ func ParseRequired(values []string, limit int64) (Required, Code) {
 	return r, ""
 }
 
-// decodeObject reads a header value as Payments does, padded standard base64 of a UTF-8 object
-func decodeObject(v string) (map[string]json.RawMessage, bool) {
-	raw, err := base64.StdEncoding.DecodeString(v)
-	// The round trip refuses what Go's decoder forgives, newlines and stray low bits
-	if err != nil || base64.StdEncoding.EncodeToString(raw) != v || !utf8.Valid(raw) {
-		return nil, false
+// decodeObject reads a header value in one of encs as base64 of a UTF-8 JSON object
+func decodeObject(v string, encs ...*base64.Encoding) (map[string]json.RawMessage, bool) {
+	for _, enc := range encs {
+		raw, err := enc.DecodeString(v)
+		// The round trip refuses what Go's decoder forgives, newlines and stray low bits
+		if err != nil || enc.EncodeToString(raw) != v {
+			continue
+		}
+		// No two forms decode one value to different bytes, so the first match decides
+		var top map[string]json.RawMessage
+		if !utf8.Valid(raw) || json.Unmarshal(raw, &top) != nil || top == nil {
+			return nil, false
+		}
+		return top, true
 	}
-	var top map[string]json.RawMessage
-	if json.Unmarshal(raw, &top) != nil || top == nil {
-		return nil, false
-	}
-	return top, true
+	return nil, false
 }
 
 // numberIs says whether raw is a JSON number equal to want
