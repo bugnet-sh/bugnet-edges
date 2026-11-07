@@ -40,9 +40,10 @@ func NewHostRate(perMinute, floor int, now func() time.Time) *HostRate {
 
 // Admit says whether a request may be sent, a resend is counted here
 func (h *HostRate) Admit(host, placement string, resend bool) bool {
-	now := h.now()
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	// Read under the lock, so the buckets see times in order
+	now := h.now()
 	h.sweep(now)
 	k := floorKey{host, placement}
 	w := h.windows[k]
@@ -66,9 +67,9 @@ func (h *HostRate) Ended(host string, answered bool, status string, resend bool)
 	if resend || !answered || !UnpaidEnd(status) {
 		return
 	}
-	now := h.now()
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	now := h.now()
 	h.sweep(now)
 	h.spend(host, now)
 }

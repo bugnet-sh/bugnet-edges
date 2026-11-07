@@ -2,6 +2,7 @@ package x402
 
 import (
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -143,8 +144,61 @@ func TestHostRateDebtIsBounded(t *testing.T) {
 	eq(t, h.Admit(host, "pl_a", false), true)
 	eq(t, h.Admit(host, "pl_a", false), false)
 
-	clk.set(cacheStart.Add(time.Minute + 200*time.Millisecond))
+	// Past the floor a request needs a whole token
+	clk.set(cacheStart.Add(time.Minute + 50*time.Millisecond))
+	eq(t, h.Admit(host, "pl_a", false), false)
+	clk.set(cacheStart.Add(time.Minute + 150*time.Millisecond))
 	eq(t, h.Admit(host, "pl_a", false), true)
+}
+
+func TestHostRateReadsTheClockUnderItsLock(t *testing.T) {
+	const host = "api.example.com"
+	for _, first := range []struct {
+		name string
+		call func(h *HostRate)
+	}{
+		{"an end", func(h *HostRate) { h.Ended(host, true, EventFree, false) }},
+		{"a resend's admit", func(h *HostRate) { h.Admit(host, "pl_a", true) }},
+	} {
+		t.Run(first.name, func(t *testing.T) {
+			clk := &cacheClock{t: cacheStart}
+			var armed, held atomic.Bool
+			stalled, release := make(chan struct{}), make(chan struct{})
+			// now holds its first read once armed, after that read took its time
+			now := func() time.Time {
+				at := clk.now()
+				if armed.Load() && held.CompareAndSwap(false, true) {
+					close(stalled)
+					<-release
+				}
+				return at
+			}
+			h := NewHostRate(60, 20, now)
+			for range 60 {
+				h.Ended(host, true, EventFree, false)
+			}
+
+			clk.set(cacheStart.Add(time.Second))
+			armed.Store(true)
+			var wg sync.WaitGroup
+			wg.Go(func() { first.call(h) })
+			<-stalled
+			clk.set(cacheStart.Add(2 * time.Second))
+			second := make(chan struct{})
+			wg.Go(func() {
+				h.Ended(host, true, EventFree, false)
+				close(second)
+			})
+			// A clock read outside the lock lets this later spend land before the held one
+			select {
+			case <-second:
+			case <-time.After(100 * time.Millisecond):
+			}
+			close(release)
+			wg.Wait()
+			eq(t, left(h, host), 0.0)
+		})
+	}
 }
 
 func TestHostRateForgetsIdleState(t *testing.T) {
