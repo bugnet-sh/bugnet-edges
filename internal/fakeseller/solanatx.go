@@ -35,6 +35,14 @@ const (
 	reasonRecipient         = "invalid_exact_svm_payload_recipient_mismatch"
 	reasonTransactionFailed = "invalid_exact_svm_transaction_failed"
 	reasonDuplicate         = "duplicate_settlement"
+	reasonComputeLimit      = "invalid_exact_svm_payload_transaction_instructions_" +
+		"compute_limit_instruction"
+	reasonComputeLimitTooHigh = "invalid_exact_svm_payload_transaction_instructions_" +
+		"compute_limit_instruction_too_high"
+	reasonComputePrice = "invalid_exact_svm_payload_transaction_instructions_" +
+		"compute_price_instruction"
+	reasonComputePriceTooHigh = "invalid_exact_svm_payload_transaction_instructions_" +
+		"compute_price_instruction_too_high"
 )
 
 // refuse is a settle refused for reason

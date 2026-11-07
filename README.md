@@ -387,6 +387,9 @@ refuses, before it signs anything:
 - a first key other than the fee payer's, or another signer's signature that fails;
 - the fee payer in any instruction, as an account or as the program;
 - any token instruction but one Tokenkeg `TransferChecked`;
+- a compute unit limit above 400,000 or a price above 5,000,000 micro-lamports, the
+  facilitator's caps, a malformed one, or a price with no limit, so a payer cannot spend the fee
+  payer's SOL on priority fees;
 - a transfer of another amount, with decimals other than 6, of a mint other than USDC, or to an
   account other than `payToTokenAccount`.
 

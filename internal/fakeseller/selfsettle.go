@@ -24,6 +24,16 @@ const (
 	tokenProgram = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
 	// token2022Program is the other token program, whose instructions a payment never holds
 	token2022Program = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
+	// computeBudgetProgram sets the compute unit limit and price the fee payer pays for
+	computeBudgetProgram = "ComputeBudget111111111111111111111111111111"
+	// setComputeUnitLimit is the compute budget's SetComputeUnitLimit, then a 4-byte limit
+	setComputeUnitLimit = 2
+	// setComputeUnitPrice is the compute budget's SetComputeUnitPrice, then an 8-byte price
+	setComputeUnitPrice = 3
+	// maxComputeUnits is the x402 SVM facilitator's default cap on the compute unit limit
+	maxComputeUnits = 400_000
+	// maxComputeUnitPrice is the x402 SVM facilitator's cap on the price, in micro-lamports
+	maxComputeUnitPrice = 5_000_000
 	// transferChecked is the token program's TransferChecked, then amount and decimals
 	transferChecked = 12
 	// transferCheckedBytes is TransferChecked's data, its tag, an 8-byte amount and decimals
@@ -173,12 +183,21 @@ func checkTransfer(tx *solanaTx, e x402.Entry, feePayer ed25519.PublicKey, dest 
 		}
 	}
 	var transfer *instruction
+	limited, priced := false, false
 	for i := range tx.instructions {
 		in := &tx.instructions[i]
 		if in.program == 0 || slices.Contains(in.accounts, 0) {
 			return refuse(reasonFeePayerTransferring)
 		}
 		program := tx.key(in.program)
+		if program == computeBudgetProgram {
+			if err := checkBudget(in.data); err != nil {
+				return err
+			}
+			limited = limited || in.data[0] == setComputeUnitLimit
+			priced = priced || in.data[0] == setComputeUnitPrice
+			continue
+		}
 		if program != tokenProgram && program != token2022Program {
 			continue
 		}
@@ -188,7 +207,11 @@ func checkTransfer(tx *solanaTx, e x402.Entry, feePayer ed25519.PublicKey, dest 
 		}
 		transfer = in
 	}
-	if transfer == nil {
+	switch {
+	case priced && !limited:
+		// Without a limit the chain charges the price for its default units, above the cap
+		return refuse(reasonComputeLimit)
+	case transfer == nil:
 		return refuse(reasonNoTransfer)
 	}
 	amount := binary.LittleEndian.Uint64(transfer.data[1:9])
@@ -200,6 +223,24 @@ func checkTransfer(tx *solanaTx, e x402.Entry, feePayer ed25519.PublicKey, dest 
 		return refuse(reasonMint)
 	case tx.key(transfer.accounts[2]) != dest:
 		return refuse(reasonRecipient)
+	}
+	return nil
+}
+
+// checkBudget refuses a compute budget instruction the fee payer would pay too much for
+func checkBudget(data []byte) error {
+	switch {
+	case len(data) == 0:
+		return refuse(reasonTransaction)
+	case data[0] == setComputeUnitLimit && len(data) != 5:
+		return refuse(reasonComputeLimit)
+	case data[0] == setComputeUnitLimit && binary.LittleEndian.Uint32(data[1:]) > maxComputeUnits:
+		return refuse(reasonComputeLimitTooHigh)
+	case data[0] == setComputeUnitPrice && len(data) != 9:
+		return refuse(reasonComputePrice)
+	case data[0] == setComputeUnitPrice &&
+		binary.LittleEndian.Uint64(data[1:]) > maxComputeUnitPrice:
+		return refuse(reasonComputePriceTooHigh)
 	}
 	return nil
 }

@@ -15,11 +15,8 @@ import (
 	"github.com/oynozan/bugnet-edges/internal/x402"
 )
 
-// The programs a seller payment calls, as Payments' signer builds it
-const (
-	computeBudgetProgram = "ComputeBudget111111111111111111111111111111"
-	memoProgram          = "MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr"
-)
+// memoProgram is the memo program a seller payment calls, as Payments' signer builds it
+const memoProgram = "MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr"
 
 // testKey is a test-only Ed25519 key from a label, the same in every run and in the fixture script
 func testKey(label string) ed25519.PrivateKey {
@@ -229,21 +226,72 @@ func TestParseReadsBothMessageForms(t *testing.T) {
 	}
 }
 
+// handmade is a version 0 transaction of two keys and one instruction, with a table loading one
+func handmade(header [3]byte, program byte, accounts []byte, lookup bool) []byte {
+	msg := slices.Concat([]byte{versioned}, header[:], shortvec(2), made("a"), made("b"),
+		made("blockhash"), shortvec(1), []byte{program}, shortvec(len(accounts)), accounts,
+		shortvec(0))
+	if lookup {
+		msg = slices.Concat(msg, shortvec(1), made("table"), shortvec(1), []byte{0}, shortvec(0))
+	} else {
+		msg = append(msg, 0)
+	}
+	return slices.Concat(shortvec(int(header[0])), make([]byte, sigBytes*int(header[0])), msg)
+}
+
+func TestParseReadsIndexesUpToTheLoadedAccounts(t *testing.T) {
+	for _, wire := range [][]byte{
+		handmade([3]byte{1, 0, 1}, 1, []byte{0, 1}, false),
+		handmade([3]byte{1, 0, 1}, 1, []byte{2}, true),
+	} {
+		if _, err := parseTx(wire); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
 func TestParseRefusesMalformedTransactions(t *testing.T) {
 	good := usdcTransfer(false, made("destination"), 1_000)
 	at := 1 + 2*64
-	cases := map[string][]byte{
-		"empty":         {},
-		"short":         good[:len(good)-1],
-		"trailing":      append(slices.Clone(good), 0),
-		"version 1":     slices.Concat(good[:at], []byte{0x81}, good[at+1:]),
-		"one signature": slices.Concat([]byte{1}, good[1:1+64], good[at:]),
-		"too big":       make([]byte, maxTxBytes+1),
-		"long shortvec": slices.Concat([]byte{0x82, 0x00}, good[1:]),
+	cases := map[string]struct {
+		wire   []byte
+		reason string
+	}{
+		"empty":         {[]byte{}, reasonUndecodable},
+		"short":         {good[:len(good)-1], reasonUndecodable},
+		"trailing":      {append(slices.Clone(good), 0), reasonUndecodable},
+		"version 1":     {slices.Concat(good[:at], []byte{0x81}, good[at+1:]), reasonVersion},
+		"one signature": {slices.Concat([]byte{1}, good[1:1+64], good[at:]), reasonUndecodable},
+		"too big":       {make([]byte, maxTxBytes+1), reasonSize},
+		"long shortvec": {slices.Concat([]byte{0x82, 0x00}, good[1:]), reasonUndecodable},
+		"program past the keys": {
+			handmade([3]byte{1, 0, 1}, 2, []byte{0}, false), reasonUndecodable,
+		},
+		"program a table loads": {
+			handmade([3]byte{1, 0, 1}, 2, []byte{0}, true), reasonUndecodable,
+		},
+		"account past the keys": {
+			handmade([3]byte{1, 0, 1}, 1, []byte{2}, false), reasonUndecodable,
+		},
+		"account past the loaded": {
+			handmade([3]byte{1, 0, 1}, 1, []byte{3}, true), reasonUndecodable,
+		},
+		"every signer read only": {
+			handmade([3]byte{1, 1, 0}, 1, []byte{0}, false), reasonUndecodable,
+		},
+		"read only past the unsigned": {
+			handmade([3]byte{1, 0, 2}, 1, []byte{0}, false), reasonUndecodable,
+		},
+		"no signer": {handmade([3]byte{0, 0, 1}, 1, []byte{0}, false), reasonUndecodable},
+		"more signers than keys": {
+			handmade([3]byte{3, 0, 0}, 1, []byte{0}, false), reasonUndecodable,
+		},
 	}
-	for name, wire := range cases {
-		if _, err := parseTx(wire); err == nil {
-			t.Errorf("%s: parsed", name)
+	for name, c := range cases {
+		_, err := parseTx(c.wire)
+		var se *SettleError
+		if !errors.As(err, &se) || se.Reason != c.reason {
+			t.Errorf("%s: got %v, want %s", name, err, c.reason)
 		}
 	}
 }
@@ -319,7 +367,20 @@ func TestCheckTransferRefusals(t *testing.T) {
 	twice = append(twice, twice[2])
 	byFee := transferIxs(pub(feeKey), made("source"), dest, usdc, 1_000, 6)
 	plain := transferIxs(authority, made("source"), dest, usdc, 1_000, 6)
-	plain[2].data = binary.LittleEndian.AppendUint64([]byte{3}, 1_000)
+	plain[2].data = append(binary.LittleEndian.AppendUint64([]byte{3}, 1_000), 6)
+	v0 := usdcTransfer(false, dest, 1_000)
+	withTable := slices.Concat(v0[:len(v0)-1], shortvec(1), made("table"), shortvec(1),
+		[]byte{0}, shortvec(0))
+	token2022 := transferIxs(authority, made("source"), dest, usdc, 1_000, 6)
+	token2022[2].program = key58(token2022Program)
+	feeProgram := append(transferIxs(authority, made("source"), dest, usdc, 1_000, 6),
+		ix{program: pub(feeKey), data: []byte{2}})
+	threeAccounts := transferIxs(authority, made("source"), dest, usdc, 1_000, 6)
+	threeAccounts[2].accounts = threeAccounts[2].accounts[:3]
+	otherAsset := entry
+	otherAsset.Asset = x402.Encode58(made("mint"))
+	free := entry
+	free.AmountMicros = 0
 	cases := map[string]struct {
 		wire   []byte
 		entry  x402.Entry
@@ -370,6 +431,21 @@ func TestCheckTransferRefusals(t *testing.T) {
 			entry:  x402.Entry{Scheme: "exact", Network: "eip155:8453"},
 			reason: reasonNetwork,
 		},
+		"lookup table": {wire: withTable, reason: reasonTransaction},
+		"token 2022": {
+			wire: build(false, pub(feeKey), token2022, allowanceKey), reason: reasonNoTransfer,
+		},
+		"fee payer as the program": {
+			wire:   build(false, pub(feeKey), feeProgram, allowanceKey),
+			reason: reasonFeePayerTransferring,
+		},
+		"three accounts": {
+			wire: build(false, pub(feeKey), threeAccounts), reason: reasonNoTransfer,
+		},
+		"another asset": {
+			wire: usdcTransfer(false, dest, 1_000), entry: otherAsset, reason: reasonMint,
+		},
+		"nothing to pay": {wire: usdcTransfer(false, dest, 0), entry: free, reason: reasonAmount},
 	}
 	for name, c := range cases {
 		tx, err := parseTx(c.wire)
@@ -383,6 +459,50 @@ func TestCheckTransferRefusals(t *testing.T) {
 		err = checkTransfer(tx, e, pub(feeKey), x402.Encode58(dest))
 		var se *SettleError
 		if !errors.As(err, &se) || se.Reason != c.reason {
+			t.Errorf("%s: got %v, want %s", name, err, c.reason)
+		}
+	}
+}
+
+// budgeted is Payments' signer's transfer with its compute budget instructions' data replaced
+func budgeted(limit, price []byte) []byte {
+	ixs := transferIxs(pub(allowanceKey), made("source"), made("destination"),
+		key58(x402.USDCMint), 1_000, 6)
+	ixs[0].data, ixs[1].data = limit, price
+	if limit == nil {
+		ixs = ixs[1:]
+	}
+	return build(false, pub(feeKey), ixs, allowanceKey)
+}
+
+func TestCheckTransferBoundsTheComputeBudget(t *testing.T) {
+	limit := func(n uint32) []byte { return binary.LittleEndian.AppendUint32([]byte{2}, n) }
+	price := func(n uint64) []byte { return binary.LittleEndian.AppendUint64([]byte{3}, n) }
+	cases := map[string]struct {
+		wire   []byte
+		reason string
+	}{
+		"at the caps":    {budgeted(limit(400_000), price(5_000_000)), ""},
+		"limit too high": {budgeted(limit(400_001), price(1)), reasonComputeLimitTooHigh},
+		"price too high": {
+			budgeted(limit(20_000), price(5_000_001)), reasonComputePriceTooHigh,
+		},
+		"limit malformed":     {budgeted(limit(20_000)[:4], price(1)), reasonComputeLimit},
+		"price malformed":     {budgeted(limit(20_000), price(1)[:8]), reasonComputePrice},
+		"price with no limit": {budgeted(nil, price(1)), reasonComputeLimit},
+		"no data":             {budgeted([]byte{}, price(1)), reasonTransaction},
+	}
+	for name, c := range cases {
+		tx, err := parseTx(c.wire)
+		if err != nil {
+			t.Fatal(name, err)
+		}
+		err = checkTransfer(tx, usdcEntry, pub(feeKey), x402.Encode58(made("destination")))
+		var se *SettleError
+		switch {
+		case c.reason == "" && err != nil:
+			t.Errorf("%s: %v", name, err)
+		case c.reason != "" && (!errors.As(err, &se) || se.Reason != c.reason):
 			t.Errorf("%s: got %v, want %s", name, err, c.reason)
 		}
 	}

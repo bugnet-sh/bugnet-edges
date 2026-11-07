@@ -1,8 +1,10 @@
 package fakeseller
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -27,6 +29,8 @@ type chain struct {
 	calls []rpcCall
 	// fail answers every call with a JSON-RPC error
 	fail bool
+	// lie answers every call with another signature
+	lie bool
 }
 
 // newChain starts a chain that closes when the test ends
@@ -40,7 +44,7 @@ func newChain(t *testing.T) *chain {
 		}
 		c.mu.Lock()
 		c.calls = append(c.calls, call)
-		fail := c.fail
+		fail, lie := c.fail, c.lie
 		c.mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
 		if fail {
@@ -55,6 +59,9 @@ func newChain(t *testing.T) *chain {
 		if len(wire) > 65 {
 			sig = x402.Encode58(wire[1:65])
 		}
+		if lie {
+			sig = settledSig
+		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": 1, "result": sig})
 	}))
 	t.Cleanup(c.Close)
@@ -66,6 +73,13 @@ func (c *chain) setFail(fail bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.fail = fail
+}
+
+// setLie makes every later call answer another signature, or its own again
+func (c *chain) setLie(lie bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.lie = lie
 }
 
 // list is every call received, in order
@@ -198,4 +212,70 @@ func TestSelfSettleChainErrorFreesTheTransaction(t *testing.T) {
 	w = send(h, http.MethodGet, "https://seller.test/slow/b", paying(second), "")
 	eq(t, settle(t, w)["success"], true)
 	eq(t, len(c.list()), 2)
+}
+
+// carrying is a PAYMENT-SIGNATURE value holding wire and an accepted entry, all a settler reads
+func carrying(t *testing.T, wire []byte) string {
+	t.Helper()
+	b, err := json.Marshal(map[string]any{
+		"accepted": map[string]string{"scheme": "exact"},
+		"payload":  map[string]string{"transaction": base64.StdEncoding.EncodeToString(wire)},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return base64.StdEncoding.EncodeToString(b)
+}
+
+// usdcEntry is the entry usdcTransfer pays with amount 1,000
+var usdcEntry = x402.Entry{
+	Scheme: "exact", Network: x402.SolanaMainnet, Asset: x402.USDCMint,
+	AmountMicros: 1_000, AmountOK: true,
+}
+
+func TestSelfSettleWantsItsOwnSignature(t *testing.T) {
+	dest := made("destination")
+	c := newChain(t)
+	c.setLie(true)
+	s := SelfSettle(c.URL, feeKey, x402.Encode58(dest))
+	p := Payment{Value: carrying(t, usdcTransfer(false, dest, 1_000)), Accepted: usdcEntry}
+	_, err := s.Settle(context.Background(), p)
+	var se *SettleError
+	if err == nil || errors.As(err, &se) {
+		t.Fatalf("another signature settled: %v", err)
+	}
+	c.setLie(false)
+	sig, err := s.Settle(context.Background(), p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	eq(t, sig == settledSig, false)
+	eq(t, len(c.list()), 2)
+}
+
+// redirecting is a server sending every request on to the same path at to
+func redirecting(t *testing.T, to string) string {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, to+r.URL.Path, http.StatusTemporaryRedirect)
+	}))
+	t.Cleanup(srv.Close)
+	return srv.URL
+}
+
+func TestSettlersFollowNoRedirect(t *testing.T) {
+	dest := made("destination")
+	c := newChain(t)
+	fac := newFacilitator(t, settledSig)
+	settlers := map[string]Settler{
+		"self":        SelfSettle(redirecting(t, c.URL), feeKey, x402.Encode58(dest)),
+		"facilitator": Facilitator(redirecting(t, fac.URL)),
+	}
+	for name, s := range settlers {
+		p := Payment{Value: carrying(t, usdcTransfer(false, dest, 1_000)), Accepted: usdcEntry}
+		if _, err := s.Settle(context.Background(), p); err == nil {
+			t.Errorf("%s: settled through a redirect", name)
+		}
+	}
+	eq(t, len(c.list()), 0)
+	eq(t, len(fac.list()), 0)
 }
