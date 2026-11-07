@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io/fs"
 	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"time"
@@ -149,12 +150,41 @@ func (s *Signer) Reload() error {
 	if err != nil {
 		return err
 	}
+	next := s.newTransport()
 	s.mu.Lock()
 	s.creds = c
+	old := s.transport
+	s.transport = next
 	s.mu.Unlock()
-	// A connection made with the old files ends once idle, so the next call makes a new handshake
-	s.transport.CloseIdleConnections()
+	// Calls in flight end on the old connections, which close after idleTimeout with no call
+	old.CloseIdleConnections()
 	return nil
+}
+
+// newTransport opens connections to Payments that dial with the files of the last good load
+func (s *Signer) newTransport() *http.Transport {
+	// No proxy from the environment and no trace header, since Payments is not a router service
+	return &http.Transport{
+		DialTLSContext:    s.dialTLS,
+		ForceAttemptHTTP2: true,
+		IdleConnTimeout:   idleTimeout,
+		HTTP2:             &http.HTTP2Config{SendPingTimeout: pingAfter, PingTimeout: pingTimeout},
+	}
+}
+
+// current is the transport of the last good load, which every new call goes through
+func (s *Signer) current() *http.Transport {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.transport
+}
+
+// latest is the client's RoundTripper, so no call made after Reload reuses an old connection
+type latest struct{ s *Signer }
+
+// RoundTrip sends r through the transport of the last good load
+func (l latest) RoundTrip(r *http.Request) (*http.Response, error) {
+	return l.s.current().RoundTrip(r)
 }
 
 // clientCert is the certificate of the last good load, read at each handshake

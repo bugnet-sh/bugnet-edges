@@ -49,7 +49,6 @@ var reasonShape = regexp.MustCompile(`^[A-Z][A-Z0-9_]{0,63}$`)
 // Signer calls Payments' X402SignerService over mutual TLS and queues outcome reports
 type Signer struct {
 	client             paymentsv1connect.X402SignerServiceClient
-	transport          *http.Transport
 	serverName         string
 	caFile, certFile   string
 	key                crypto.Signer
@@ -58,9 +57,10 @@ type Signer struct {
 	log                *slog.Logger
 	queue              chan queued
 
-	mu      sync.Mutex
-	creds   creds
-	pending int
+	mu        sync.Mutex
+	creds     creds
+	transport *http.Transport
+	pending   int
 
 	// pause is the wait before a report's second try
 	pause time.Duration
@@ -108,15 +108,9 @@ func NewSigner(
 	if sg.creds, err = sg.load(); err != nil {
 		return nil, err
 	}
-	// No proxy from the environment and no trace header, since Payments is not a router service
-	sg.transport = &http.Transport{
-		DialTLSContext:    sg.dialTLS,
-		ForceAttemptHTTP2: true,
-		IdleConnTimeout:   idleTimeout,
-		HTTP2:             &http.HTTP2Config{SendPingTimeout: pingAfter, PingTimeout: pingTimeout},
-	}
+	sg.transport = sg.newTransport()
 	hc := &http.Client{
-		Transport: sg.transport,
+		Transport: latest{sg},
 		CheckRedirect: func(*http.Request, []*http.Request) error {
 			return http.ErrUseLastResponse
 		},

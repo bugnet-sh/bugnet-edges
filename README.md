@@ -224,7 +224,11 @@ send the caller's token only to the router URL and never follow a redirect.
 - A missing or unreadable file, a file with no PEM certificate or key, or a certificate for
   another key fails `NewSigner`. The error names the setting, never the path or the key.
 - No log line holds a payload, a `ref`, a `payTo`, a target or an error message Payments sent.
-- `Reload` closes idle connections, so the next call makes a handshake with the new files.
+  A line names an `ErrorInfo` reason only when it is upper case, digits and `_`, up to 64.
+- `Reserve` logs no line when its caller gave up first. A `payments_timeout` deadline is logged.
+- After `Reload`, each new call goes through a new transport, so it makes a handshake with the
+  new files, even while other calls keep a connection busy. Calls in flight end on the old
+  connections, which close after 90 s with no call.
 - From 30 days before egress's certificate expires, `Run` logs one error line a day. It names the
   file and the days left.
 

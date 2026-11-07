@@ -1,16 +1,19 @@
 package x402
 
 import (
+	"bytes"
 	"context"
 	"crypto/x509"
 	"encoding/pem"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/oynozan/bugnet-edges/internal/x402/x402test"
+	paymentsv1 "github.com/oynozan/bugnet-proto/gen/go/bugnet/payments/v1"
 )
 
 func TestSignerLoadsDevLayout(t *testing.T) {
@@ -170,9 +173,59 @@ func TestReloadKeepsKey(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "x402.payments_client_cert_file") {
 		t.Fatalf("got %v, want a refusal naming the file setting", err)
 	}
-	s.transport.CloseIdleConnections()
+	s.current().CloseIdleConnections()
 	reserveOK(t, s, "cccccccccccccccc")
 	eq(t, lastClient(t, e.fake).Raw, second.Raw)
+}
+
+func TestReloadReachesABusyConnection(t *testing.T) {
+	e := newSignerEnv(t)
+	s := e.signer(t)
+	release := make(chan struct{})
+	let := sync.OnceFunc(func() { close(release) })
+	t.Cleanup(let)
+	e.fake.OnReserve(func(ctx context.Context, r *paymentsv1.ReserveAndSignRequest) (
+		*paymentsv1.ReserveAndSignResponse, error,
+	) {
+		if r.GetRef() == "aaaaaaaaaaaaaaaa" {
+			select {
+			case <-release:
+			case <-ctx.Done():
+			}
+		}
+		return nil, nil
+	})
+	held := make(chan error, 1)
+	go func() {
+		_, err := s.Reserve(context.Background(), reserveRequest("aaaaaaaaaaaaaaaa"))
+		held <- err
+	}()
+	waitFor(t, "the held call", func() bool { return len(e.fake.Reserves()) == 1 })
+	first := lastClient(t, e.fake)
+
+	renewed := e.ca.Issue(t, &e.ca.ClientKey.PublicKey, x402test.ClientName,
+		x509.ExtKeyUsageClientAuth, time.Now().AddDate(1, 0, 0))
+	writeFile(t, e.s.PaymentsClientCertFile, renewed)
+	if err := s.Reload(); err != nil {
+		t.Fatal(err)
+	}
+	reserveOK(t, s, "bbbbbbbbbbbbbbbb")
+	if !bytes.Equal(lastClient(t, e.fake).Raw, pemDER(t, renewed)) {
+		t.Fatal("the next call kept the busy connection and the old certificate")
+	}
+
+	let()
+	select {
+	case err := <-held:
+		if err != nil {
+			t.Fatalf("the call in flight failed: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("the call in flight never ended")
+	}
+	if !bytes.Equal(e.fake.Calls()[0].Client.Raw, first.Raw) {
+		t.Fatal("the call in flight moved off its connection")
+	}
 }
 
 func TestReloadKeepsTheOldCA(t *testing.T) {
