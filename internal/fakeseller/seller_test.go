@@ -11,6 +11,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -124,9 +126,12 @@ func TestBadPaymentsGetA402(t *testing.T) {
 	_, entry := required(t, first(h, "/ok/x"))
 	v1 := base64.StdEncoding.EncodeToString([]byte(
 		`{"x402Version":1,"accepted":` + string(entry) + `,"payload":{"transaction":"fake-a"}}`))
+	oversized := base64.StdEncoding.EncodeToString([]byte(`{"x402Version":2,"accepted":` +
+		string(entry) + `,"payload":{"transaction":"fake-big"},"pad":"` +
+		strings.Repeat("a", maxPayload) + `"}`))
 	for _, value := range []string{
 		"", "%%%", base64.StdEncoding.EncodeToString([]byte(`[]`)), v1,
-		base64.RawStdEncoding.EncodeToString([]byte(`{"x402Version":2}`)),
+		base64.RawStdEncoding.EncodeToString([]byte(`{"x402Version":2}`)), oversized,
 	} {
 		required(t, send(h, http.MethodGet, "/ok/x", paying(value), ""))
 	}
@@ -450,4 +455,47 @@ func TestInMemoryTakesOnlyTheTestFormat(t *testing.T) {
 		t.Fatal("one transaction settled twice")
 	}
 	eq(t, len(ledger.Transfers()), 1)
+}
+
+func TestKeptForgetsTheOldest(t *testing.T) {
+	k := newKept[string, int](2)
+	k.put("a", 1)
+	k.put("b", 2)
+	k.put("a", 3)
+	v, ok := k.get("a")
+	eq(t, v, 3)
+	eq(t, ok, true)
+	k.put("c", 4)
+	_, ok = k.get("a")
+	eq(t, ok, false)
+	for key, want := range map[string]int{"b": 2, "c": 4} {
+		v, ok = k.get(key)
+		eq(t, v, want)
+		eq(t, ok, true)
+	}
+	eq(t, len(k.m), 2)
+}
+
+func TestSellerKeepsAtMostItsLimit(t *testing.T) {
+	ledger := InMemory()
+	c := config(ledger)
+	c.TestToken = "tok"
+	s := newSeller(c, 3)
+	_, entry := required(t, first(s, "/ok/x"))
+	_, pidEntry := required(t, first(s, "/pid/x"))
+	values := []string{}
+	for i := range 5 {
+		ref := "r" + strconv.Itoa(i)
+		value := x402test.PaymentSignature(entry, ref)
+		values = append(values, value)
+		eq(t, send(s, http.MethodGet, "/ok/x", paying(value), "").Code, http.StatusOK)
+		id := "bn_" + strings.Repeat(strconv.Itoa(i), 16)
+		w := send(s, http.MethodGet, "/pid/x", paying(pidPayment(pidEntry, "p"+ref, id)), "")
+		eq(t, w.Code, http.StatusOK)
+	}
+	eq(t, len(testList(t, s, "/__test/payloads")), 3)
+	eq(t, testList(t, s, "/__test/settled"), signatures(ledger)[7:])
+	eq(t, len(s.seen.m), 3)
+	eq(t, len(s.cached.m), 3)
+	eq(t, slices.Contains(testList(t, s, "/__test/payloads"), values[0]), false)
 }

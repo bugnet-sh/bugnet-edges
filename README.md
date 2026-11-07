@@ -278,6 +278,9 @@ takes the fixed test format of the fake Payments in `x402test` and needs no chai
 - `/echo/`'s body gives `PAYMENT-SIGNATURE` only as its SHA-256, so no payload reaches a body.
 - With `TestToken` set, `GET /__test/payloads` and `GET /__test/settled` list the payloads
   received and the signatures settled, for that bearer token only. Without it they are 404.
+  A payload is listed only when it decodes as x402 v2. Each value of a header is listed apart.
+- The seller keeps at most 1,024 payloads seen, `/pid/` answers and entries in each list,
+  forgetting the oldest. It takes no `PAYMENT-SIGNATURE` value over 16 KiB as a payment.
 
 ## Traffic
 

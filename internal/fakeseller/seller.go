@@ -63,6 +63,10 @@ const (
 const (
 	// maxOffered bounds the entries kept per prefix, which only /switch/ grows
 	maxOffered = 64
+	// maxKept bounds the payloads seen, the /pid/ answers and each test API list
+	maxKept = 1024
+	// maxPayload bounds a PAYMENT-SIGNATURE value taken as a payment, far above a real one
+	maxPayload = 16 << 10
 	// maxBody bounds what a paid answer reads of a body, above the most egress keeps for a retry
 	maxBody = 8 << 20
 	// lateReason is the errorReason /late/ answers, a facilitator's confirmation timeout
@@ -81,12 +85,52 @@ type seller struct {
 	switches int
 	// offered holds the accepts entries put in 402s, by mode prefix
 	offered map[string][]offer
-	// seen holds the SHA-256 of every payload a paid mode took
-	seen map[[sha256.Size]byte]bool
-	// cached holds /pid/'s answers by payment id, or by payload without one
-	cached map[string]answer
+	// seen holds the SHA-256 of the payloads a paid mode took
+	seen *kept[[sha256.Size]byte, bool]
+	// cached holds /pid/'s answers by payment id, or by payload hash without one
+	cached *kept[string, answer]
+	// limit bounds each test API list
+	limit int
 	// payloads and settled are the test API's lists, kept only with a TestToken
 	payloads, settled []string
+}
+
+// kept is a map that forgets its oldest key once it holds limit keys
+type kept[K comparable, V any] struct {
+	limit int
+	m     map[K]V
+	order []K
+}
+
+// newKept makes a kept of at most limit keys
+func newKept[K comparable, V any](limit int) *kept[K, V] {
+	return &kept[K, V]{limit: limit, m: map[K]V{}}
+}
+
+// get is the value kept for key
+func (k *kept[K, V]) get(key K) (V, bool) {
+	v, ok := k.m[key]
+	return v, ok
+}
+
+// put keeps v for key, forgetting the oldest key when full
+func (k *kept[K, V]) put(key K, v V) {
+	if _, ok := k.m[key]; !ok {
+		if len(k.order) >= k.limit {
+			delete(k.m, k.order[0])
+			k.order = k.order[1:]
+		}
+		k.order = append(k.order, key)
+	}
+	k.m[key] = v
+}
+
+// appendKept appends v to list, dropping the oldest past limit
+func appendKept(list []string, v string, limit int) []string {
+	if len(list) >= limit {
+		list = slices.Delete(list, 0, 1)
+	}
+	return append(list, v)
 }
 
 // offer is one accepts entry a 402 carried, decoded for a deep comparison
@@ -104,6 +148,11 @@ type answer struct {
 
 // New serves the modes of XS 11.2 by path prefix
 func New(c Config) http.Handler {
+	return newSeller(c, maxKept)
+}
+
+// newSeller is a seller keeping at most limit entries in each store
+func newSeller(c Config, limit int) *seller {
 	if c.Settler == nil {
 		panic("fakeseller: Config.Settler is nil")
 	}
@@ -119,8 +168,9 @@ func New(c Config) http.Handler {
 	return &seller{
 		c:       c,
 		offered: map[string][]offer{},
-		seen:    map[[sha256.Size]byte]bool{},
-		cached:  map[string]answer{},
+		seen:    newKept[[sha256.Size]byte, bool](limit),
+		cached:  newKept[string, answer](limit),
+		limit:   limit,
 	}
 }
 
@@ -140,12 +190,14 @@ func (s *seller) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	values := r.Header.Values("Payment-Signature")
+	for _, v := range values {
+		if _, ok := decodePayload(v); ok {
+			s.receive(v)
+		}
+	}
 	value := ""
 	if len(values) == 1 {
 		value = values[0]
-	}
-	if len(values) > 0 {
-		s.receive(value)
 	}
 	rt, ok := parse(r.URL.Path)
 	if !ok {
@@ -269,6 +321,9 @@ type payload struct {
 // decodePayload reads a PAYMENT-SIGNATURE value as padded standard base64 of a v2 payload
 func decodePayload(value string) (payload, bool) {
 	var p payload
+	if len(value) > maxPayload {
+		return payload{}, false
+	}
 	raw, err := base64.StdEncoding.DecodeString(value)
 	if err != nil || json.Unmarshal(raw, &p) != nil || p.Version != 2 {
 		return payload{}, false
@@ -281,7 +336,8 @@ func (s *seller) pay(
 	w http.ResponseWriter, r *http.Request, rt route, value string, body *bodySum,
 ) {
 	p, ok := decodePayload(value)
-	key := "payload:" + value
+	sum := sha256.Sum256([]byte(value))
+	key := "payload:" + hex.EncodeToString(sum[:])
 	if id := p.Extensions.PID.Info.ID; pidID.MatchString(id) {
 		key = "id:" + id
 	}
@@ -291,7 +347,7 @@ func (s *seller) pay(
 			return
 		}
 	}
-	if !s.firstSight(value) || !ok {
+	if !ok || !s.firstSight(sum) {
 		s.require(w, r, rt)
 		return
 	}
@@ -309,16 +365,14 @@ func (s *seller) pay(
 		s.require(w, r, rt)
 		return
 	case "lie":
-		sum := sha512.Sum512([]byte("fakeseller lie " + value))
-		s.paid(rt, r, body, entry.Network, x402.Encode58(sum[:])).write(w)
+		made := sha512.Sum512([]byte("fakeseller lie " + value))
+		s.paid(rt, r, body, entry.Network, x402.Encode58(made[:])).write(w)
 		return
 	case "late":
 		time.AfterFunc(s.c.Late, func() {
 			_, _ = s.settle(context.Background(), payment)
 		})
-		a := s.paid(rt, r, body, entry.Network, "")
-		a.header.Set("Payment-Response", settleHeader(false, "", entry.Network))
-		a.write(w)
+		s.unsettled(rt, r, body, entry.Network, lateReason).write(w)
 		return
 	case "slow":
 		t := time.NewTimer(s.c.Slow)
@@ -340,17 +394,26 @@ func (s *seller) pay(
 	a := s.paid(rt, r, body, entry.Network, sig)
 	if rt.name == "pid" {
 		s.mu.Lock()
-		s.cached[key] = a
+		s.cached.put(key, a)
 		s.mu.Unlock()
 	}
 	a.write(w)
+}
+
+// unsettled is a mode's 200 whose PAYMENT-RESPONSE says success false with reason
+func (s *seller) unsettled(
+	rt route, r *http.Request, body *bodySum, network, reason string,
+) answer {
+	a := s.paid(rt, r, body, network, "")
+	a.header.Set("Payment-Response", settleHeader("", network, reason))
+	return a
 }
 
 // paid is a mode's answer to a paid retry, sig empty for none in PAYMENT-RESPONSE
 func (s *seller) paid(rt route, r *http.Request, body *bodySum, network, sig string) answer {
 	a := answer{status: http.StatusOK, header: http.Header{}}
 	if sig != "" && rt.name != "silent" {
-		a.header.Set("Payment-Response", settleHeader(true, sig, network))
+		a.header.Set("Payment-Response", settleHeader(sig, network, ""))
 	}
 	switch rt.name {
 	case "settle500", "settle500-wait":
@@ -399,7 +462,7 @@ func (s *seller) settle(ctx context.Context, p Payment) (string, error) {
 	}
 	if s.c.TestToken != "" {
 		s.mu.Lock()
-		s.settled = append(s.settled, sig)
+		s.settled = appendKept(s.settled, sig, s.limit)
 		s.mu.Unlock()
 	}
 	return sig, nil
@@ -412,18 +475,17 @@ func (s *seller) receive(value string) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.payloads = append(s.payloads, value)
+	s.payloads = appendKept(s.payloads, value, s.limit)
 }
 
-// firstSight marks a payload seen, false when it was seen before
-func (s *seller) firstSight(value string) bool {
-	sum := sha256.Sum256([]byte(value))
+// firstSight marks a payload's SHA-256 seen, false when it was seen before
+func (s *seller) firstSight(sum [sha256.Size]byte) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.seen[sum] {
+	if _, seen := s.seen.get(sum); seen {
 		return false
 	}
-	s.seen[sum] = true
+	s.seen.put(sum, true)
 	return true
 }
 
@@ -431,8 +493,7 @@ func (s *seller) firstSight(value string) bool {
 func (s *seller) cachedAnswer(key string) (answer, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	a, ok := s.cached[key]
-	return a, ok
+	return s.cached.get(key)
 }
 
 // sse writes one event every SSEEvery for SSEFor, flushing each at once
@@ -492,11 +553,10 @@ type settleResponse struct {
 	Network     string `json:"network"`
 }
 
-// settleHeader is a PAYMENT-RESPONSE value, its errorReason lateReason on a failure
-func settleHeader(success bool, sig, network string) string {
-	res := settleResponse{Success: success, Transaction: sig, Network: network}
-	if !success {
-		res.ErrorReason = lateReason
+// settleHeader is a PAYMENT-RESPONSE value, a failure when reason is not empty
+func settleHeader(sig, network, reason string) string {
+	res := settleResponse{
+		Success: reason == "", ErrorReason: reason, Transaction: sig, Network: network,
 	}
 	return base64.StdEncoding.EncodeToString(mustJSON(res))
 }

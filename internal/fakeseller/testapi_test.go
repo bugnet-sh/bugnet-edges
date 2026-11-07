@@ -1,9 +1,13 @@
 package fakeseller
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
+
+	"github.com/oynozan/bugnet-edges/internal/x402/x402test"
 )
 
 // testList reads one list of the test API with the token tok
@@ -54,4 +58,21 @@ func TestTestAPINeedsItsToken(t *testing.T) {
 	eq(t, send(h, http.MethodPost, "/__test/settled", header, "").Code,
 		http.StatusMethodNotAllowed)
 	eq(t, send(h, http.MethodGet, "/__test/other", header, "").Code, http.StatusNotFound)
+}
+
+func TestTestAPIListsEachPayload(t *testing.T) {
+	c := config(InMemory())
+	c.TestToken = "tok"
+	h := New(c)
+	_, entry := required(t, first(h, "/ok/x"))
+	a, b := x402test.PaymentSignature(entry, "a"), x402test.PaymentSignature(entry, "b")
+	send(h, http.MethodGet, "/ok/x", http.Header{"Payment-Signature": {a, "", b}}, "")
+	b64 := base64.StdEncoding.EncodeToString
+	for _, junk := range []string{
+		"", "junk", b64([]byte(`{"x402Version":1}`)),
+		b64([]byte(`{"x402Version":2,"pad":"` + strings.Repeat("a", maxPayload) + `"}`)),
+	} {
+		send(h, http.MethodGet, "/ok/x", paying(junk), "")
+	}
+	eq(t, testList(t, h, "/__test/payloads"), []string{a, b})
 }
