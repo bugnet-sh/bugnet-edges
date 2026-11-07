@@ -7,6 +7,12 @@ import (
 	"time"
 )
 
+// Mark and Unknown are DP 4.5's mark on an address past the limit and life of a failed token
+const (
+	Mark    = 10 * time.Minute
+	Unknown = 10 * time.Second
+)
+
 const (
 	// maxAddrs matches HAProxy's per-source tables, past it an arbitrary address gives way
 	maxAddrs   = 200_000
