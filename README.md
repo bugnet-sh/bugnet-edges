@@ -30,7 +30,7 @@ The binaries are `bugnet-edge` (also run as `bugnet-secrets`), `bugnet-ssh`, `bu
 | `internal/usage` | Byte counts sent to the router, and the bytes left it answers |
 | `internal/events` | The router's event stream, resumed from its cursor |
 | `internal/lease` | One context per placement that ends at its deadline, end or spent budget |
-| `internal/x402` | `[x402]` settings, refusals, dollar text, headers, paths, 402s, bodies, cache |
+| `internal/x402` | `[x402]` settings, refusals, headers, paths, 402s, bodies, cache, unpaid caps |
 | `internal/x402/x402test` | A test CA in the `mtls init --dev` layout and a fake Payments signer |
 | `internal/fakeseller` | The fake x402 seller of XS 11.2 and an in-memory settler |
 
@@ -232,6 +232,34 @@ send the caller's token only to the router URL and never follow a redirect.
   connections, which close after 90 s with no call.
 - From 30 days before egress's certificate expires, `Run` logs one error line a day. It names the
   file and the days left.
+
+## Unpaid use and the host rate
+
+`x402.Counters` keep each placement's unpaid use per x402 host (XS 6.8). `x402.HostRate` holds
+the unpaid requests a minute per host across placements, the founder's pick (b) of 2026-11-07.
+
+| Part | Rule |
+| --- | --- |
+| `Over` | True once a host's unpaid requests or bytes reach the placement's cap |
+| `AddBytes` | Counts bytes as they flow and says when the byte cap is reached |
+| `CountsRequest` | Reached the seller and ended unpaid, and no limit of Bugnet's own refused it |
+| `Merge` | On each resolve, the larger of the own count and `unpaid_used` plus unsent deltas |
+| `RunReports` | Sends deltas through `ReportEgressUsage` every interval, with `usage` empty |
+| `Admit` | Passes the floor's requests, then others only while the host's bucket holds a token |
+| `Ended` | Spends one token when the answer started and the end is not `paid` or `uncertain` |
+
+- A report that fails or gets no answer within one interval goes out again with the next one.
+  When the context ends, `RunReports` sends what is left once.
+- A report still waiting for the router's answer counts as unsent in `Merge`, since
+  `unpaid_used` may not hold it yet. When it does, the count is high by that one report.
+- `Drop` forgets a placement once its last deltas reached the router.
+- The bucket holds `custom_host_requests_per_minute` and refills over a minute. Paid and
+  uncertain ends never spend from it. A cached resend spends one at `Admit` and none at its end.
+- An empty bucket goes into debt, at most one minute's refill. So once an attacker stops,
+  requests past the floor pass again within about a minute.
+- The floor is `host_rate_floor_per_placement` requests a minute per placement and host, counted
+  from the placement's first request to the host.
+- Past windows and full buckets are forgotten once a minute.
 
 ## The fake x402 seller
 
