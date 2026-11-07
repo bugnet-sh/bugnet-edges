@@ -32,7 +32,7 @@ The binaries are `bugnet-edge` (also run as `bugnet-secrets`), `bugnet-ssh`, `bu
 | `internal/lease` | One context per placement that ends at its deadline, end or spent budget |
 | `internal/x402` | `[x402]` settings, refusals, headers, paths, 402s, bodies, cache, caps, events |
 | `internal/x402/x402test` | A test CA in the `mtls init --dev` layout and a fake Payments signer |
-| `internal/fakeseller` | The fake x402 seller of XS 11.2 and an in-memory settler |
+| `internal/fakeseller` | The fake x402 seller of XS 11.2 and its settlers |
 
 ## Listeners
 
@@ -369,6 +369,48 @@ takes the fixed test format of the fake Payments in `x402test` and needs no chai
   A payload is listed only when it decodes as x402 v2. Each value of a header is listed apart.
 - The seller keeps at most 1,024 payloads seen, `/pid/` answers and entries in each list,
   forgetting the oldest. It takes no `PAYMENT-SIGNATURE` value over 16 KiB as a payment.
+
+### Settlers
+
+- `fakeseller.InMemory()` takes the fixed test format, with no chain.
+- `fakeseller.SelfSettle(rpcURL, feePayer, payToTokenAccount)` signs the fee payer's slot and
+  sends the transaction with `sendTransaction`, in base64.
+- `fakeseller.Facilitator(url)` posts to an x402 facilitator's `/verify`, then to its `/settle`.
+
+`SelfSettle` acts as its own facilitator (XS 11.2). It reads a legacy or version 0 message and
+refuses, before it signs anything:
+
+- an entry other than `exact` on Solana mainnet;
+- an address lookup table, whose accounts only the chain knows;
+- a first key other than the fee payer's, or another signer's signature that fails;
+- the fee payer in any instruction, as an account or as the program;
+- any token instruction but one Tokenkeg `TransferChecked`;
+- a transfer of another amount, with decimals other than 6, of a mint other than USDC, or to an
+  account other than `payToTokenAccount`.
+
+Each refusal is a `SettleError` named as x402's SVM facilitator names it, so the payer gets a new
+402. The token account is a setting, so the seller never derives an ATA. It sends each message
+once, and a second payload carrying it gets `duplicate_settlement`. A failed send frees the
+message for another try. A JSON-RPC error is `invalid_exact_svm_transaction_failed`.
+
+`Facilitator` posts `{x402Version: 2, paymentPayload, paymentRequirements}` to both paths, the
+payload as the payer sent it and the requirements as its `accepted` entry. It settles only after
+`isValid: true`. An answer of `isValid: false` or `success: false` passes on its reason, at any
+HTTP status. An answer with neither field, or a settle with no 64-byte transaction signature, is
+`unexpected_settle_error`.
+
+### The test transfer and the facilitator goldens
+
+`internal/fakeseller/testdata/payments-transfer.json` is a seller payment that bugnet-payments'
+own `buildSellerPayment` and `signSellerPayment` made, with the fee payer's slot empty. Run
+`node testdata/payments-transfer.mjs <bugnet-payments directory>` in `internal/fakeseller` to
+make it again. Its keys come from public labels: each is the Ed25519 key whose seed is the
+SHA-256 of `bugnet fakeseller test <label>`, for the labels `fee payer`, `allowance`, `pay to`
+and `blockhash`. None of them is a secret.
+
+`testdata/facilitator-verify.json` and `testdata/facilitator-settle.json` are the bodies
+`Facilitator` posts for that payment at `/ok/x`. The mainnet test seller's facilitator replays
+them. `go test ./internal/fakeseller -run TestFacilitatorOrder -update` writes them again.
 
 ## Traffic
 

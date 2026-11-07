@@ -1,0 +1,11 @@
+{
+    "made_with": "bugnet-payments 6c4ab84 buildSellerPayment and signSellerPayment",
+    "transaction": "AgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABf5NMAat9LSGvj4RVODw5Y6DEfolvSlTFw6a0OAliT9glodtC/gM6MzitVopfLOEN4oaPDyk7U27gAC/cQAfUIgAIBBAj/LEPTtU3u1ph8uuaPahbRy00Z2a+OkIh4GSwjUE88gFtX0TFn+3SeNXJUbDWKqxe7vUgfm9lt3ZQUzn7sv/MxAdfmA+fCPujljNddJPgYav9OApZgdiKii8U+tVTW8o+hG9U/HqTCmswFd8UIoEtT4YNANWRit/aZNn4Z294GNgMGRm/lIRcy/+ytunLDm+e8jOW7xfcSayxDmzpAAAAAxvp6877brTo9ZfNqq8l0MbG75MLS9uDkfKYCA0UvXWEFSlNamSkhBk0k6HFg2jh8fDW13bySu4HkH6hAQQVEjQbd9uHXZaGT2cvhRs7reawctIXtX1s3kTqM9YV+/wCp1VeqjDtasxJ5SePXh1W5Bpoh6kTLndiOeUNulFIMm9oEBAAFAiBOAAAEAAkDAQAAAAAAAAAHBAIFAwEKDOgDAAAAAAAABgYAIDAxMjM0NTY3ODlhYmNkZWYwMTIzNDU2Nzg5YWJjZGVmAA==",
+    "fee_payer": "JB67Seyj69RCgKvbFZyYjXUrhx9AgGZ4gCBknUrFYcXq",
+    "authority": "79ZmTJE65Kpx5QUHacbL2BDhWENgukx9cxKhKeoUg8G8",
+    "pay_to": "ApP993TBkpkUVFtYibkjmKGr1EsipdJwfxyFQg26wrxg",
+    "source": "8CMGTdevBUGgnqjQdFdmNL4X9G4MzBaBKLdNon7t99g",
+    "destination": "BquFnkqBnwttk5zderTJSfFk6bPNz7zbiTRa3gMHxi85",
+    "amount": 1000,
+    "blockhash": "FMoNabkoRzdfNdgRUYwY4MB1GvtoWkqTs75Srko9ztZ7"
+}

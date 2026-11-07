@@ -138,6 +138,15 @@ func (k *kept[K, V]) put(key K, v V) {
 	k.m[key] = v
 }
 
+// forget drops key
+func (k *kept[K, V]) forget(key K) {
+	if _, ok := k.m[key]; !ok {
+		return
+	}
+	delete(k.m, key)
+	k.order = slices.DeleteFunc(k.order, func(o K) bool { return o == key })
+}
+
 // appendKept appends v to list, dropping the oldest past limit
 func appendKept(list []string, v string, limit int) []string {
 	if len(list) >= limit {
