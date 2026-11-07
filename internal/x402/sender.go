@@ -12,7 +12,7 @@ import (
 	"github.com/oynozan/bugnet-proto/gen/go/bugnet/router/v1/routerv1connect"
 )
 
-// The event sender's log lines, which carry only the fields of XS 6.14's log rule
+// The event sender's log lines, written when the router takes a row and when a row is dropped
 const (
 	msgEventSent    = "x402 event sent"
 	msgEventDropped = "x402 event dropped"
@@ -261,7 +261,7 @@ func (r *eventRow) dropLevel() slog.Level {
 	return slog.LevelWarn
 }
 
-// logRow writes XS 6.14's line for a row, never its path, refs, pay_to or service
+// logRow writes a row's log line, never its path, refs, pay_to or service
 func (e *Events) logRow(
 	level slog.Level, msg, placement string, ev *routerv1.X402Event, more ...any,
 ) {
