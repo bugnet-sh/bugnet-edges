@@ -68,6 +68,7 @@ func shape(ev *routerv1.X402Event) {
 	if r := Code(ev.Reason); r == CodePathRefused || r == CodeUpgradeRefused {
 		ev.Path = ""
 	}
+	ev.Path, _, _ = strings.Cut(ev.Path, "?")
 	ev.Path = visible(ev.Path, maxEventPath)
 	ev.Host = visible(ev.Host, maxEventHost)
 	if ev.Network != SolanaMainnet || ev.Asset != USDCMint || ev.Scheme != schemeExact {

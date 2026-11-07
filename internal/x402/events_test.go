@@ -60,6 +60,9 @@ func TestShapePath(t *testing.T) {
 	}{
 		{"kept", EventFree, "", true, "/v1/auto/chat", "/v1/auto/chat"},
 		{"120 characters cut to 80", EventFree, "", true, long, long[:80]},
+		{"the query dropped", EventFree, "", true, "/v1/auto/x?key=secret&a=1", "/v1/auto/x"},
+		{"an empty query dropped", EventFree, "", true, "/v1/auto/x?", "/v1/auto/x"},
+		{"a query past 80 dropped", EventFree, "", true, long[:70] + "?" + long, long[:70]},
 		{"the target failed", EventRefusedRequest, CodePathNotEnabled, false, "/v1/x", ""},
 		{"path_refused", EventRefusedRequest, CodePathRefused, true, "/v1/x", ""},
 		{"upgrade_refused", EventRefusedRequest, CodeUpgradeRefused, true, "/ws", ""},
@@ -75,6 +78,15 @@ func TestShapePath(t *testing.T) {
 			eq(t, len(ev.GetPath()) <= 80, true)
 		})
 	}
+
+	t.Run("Add drops the query too", func(t *testing.T) {
+		e, s, clk, _ := newTestEvents(t)
+		ev := eventCall(EventFree, "", eventAt(5))
+		ev.Path = "/v1/auto/x?key=secret"
+		e.Add("pl_a", ev)
+		clk.set(eventAt(30))
+		eq(t, flushed(t, e, s, "pl_a")[0].GetPath(), "/v1/auto/x")
+	})
 }
 
 func TestShapeHost(t *testing.T) {

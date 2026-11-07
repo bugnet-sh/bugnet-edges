@@ -285,6 +285,8 @@ router's `AppendX402Events` (XS 6.14). The interval is `event_flush_interval`.
 | `asked_micros`, `asset`, `network`, `scheme`, `x402_version` | The offer is exact USDC on Solana |
 | `pay_to` | The offer is exact USDC on Solana and it decodes to 32 bytes |
 
+`path` never holds a query. It ends before its first `?`.
+
 Folding:
 
 - A row can involve money when its status is `paid`, `uncertain` or `payment_failed`, or its
