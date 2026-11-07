@@ -202,11 +202,19 @@ func TestPidAnswersFromCache(t *testing.T) {
 	eq(t, again.Code, http.StatusOK)
 	eq(t, again.Header().Get("Payment-Response"), w.Header().Get("Payment-Response"))
 	eq(t, len(ledger.Transfers()), 2)
+	other := send(h, http.MethodGet, "/pid/x", paying(x402test.PaymentSignature(entry, "r5")), "")
+	eq(t, other.Code, http.StatusOK)
+	eq(t, len(ledger.Transfers()), 3)
+	eq(t, settle(t, other)["transaction"], any(signatures(ledger)[2]))
 
 	short := pidPayment(entry, "r4", "too-short")
 	eq(t, send(h, http.MethodGet, "/pid/x", paying(short), "").Code, http.StatusOK)
 	eq(t, send(h, http.MethodGet, "/pid/x", paying(short), "").Code, http.StatusOK)
-	eq(t, len(ledger.Transfers()), 3)
+	eq(t, len(ledger.Transfers()), 4)
+	short = pidPayment(entry, "r6", "too-short")
+	eq(t, send(h, http.MethodGet, "/pid/x", paying(short), "").Code, http.StatusOK)
+	eq(t, len(ledger.Transfers()), 5)
+	eq(t, ledger.Transfers()[4].Transaction, "fake-r6")
 }
 
 func TestLieNeverSettles(t *testing.T) {
