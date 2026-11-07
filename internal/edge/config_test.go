@@ -61,7 +61,7 @@ func TestExampleEdgeLoadsAtTheDefaults(t *testing.T) {
 		PreviewDomain: "preview.bugnet.sh", TransferHost: "transfer.bugnet.sh",
 		HooksHost: "hooks.bugnet.sh",
 	}
-	want.Previews.AbuseContact = "abuse@bugnet.sh"
+	want.Previews.AbuseContact = "abuse@bugnet.org"
 	want.EdgeID = cfg.EdgeID
 	want.Token, want.HookPathSecret = edgeToken, hookSecret
 	eq(t, cfg, want)

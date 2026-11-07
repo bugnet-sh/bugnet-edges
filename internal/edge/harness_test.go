@@ -84,7 +84,7 @@ func testConfig(t *testing.T) Config {
 	c.ProxyProtocolFrom = []netip.Prefix{netip.MustParsePrefix("127.0.0.1/32")}
 	c.Drain = settings.Duration(time.Second)
 	c.Names = Names{PreviewDomain: previewDomain, TransferHost: transferHost, HooksHost: hooksHost}
-	c.Previews.AbuseContact = "abuse@bugnet.sh"
+	c.Previews.AbuseContact = "abuse@bugnet.org"
 	c.ACME = ACME{StaticDir: staticPair(t)}
 	return c
 }

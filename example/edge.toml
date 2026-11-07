@@ -22,7 +22,7 @@ route_ttl = "60s"                     # a cached route is resolved again after t
 token_failures_per_minute = 20        # per client IP, then 429 for 10 minutes, 0 is no limit
 queue_wait = "30s"
 queue_max = 256                       # waiting requests per placement, then 503 at once
-abuse_contact = "abuse@bugnet.sh"     # required, a mail address or an https URL
+abuse_contact = "abuse@bugnet.org"     # required, a mail address or an https URL
 boat_requests_per_minute = 5000       # edge-wide toward Boat, 0 = off after the 16.3 test
 
 [transfers]
