@@ -47,7 +47,7 @@ func (b *Buffers) Take(placement string, n int64) (*Slot, bool) {
 	return &Slot{b: b, placement: placement, n: n}, true
 }
 
-// Held is what one placement holds, for tests and the gauge
+// Held is what one placement holds, for tests
 func (b *Buffers) Held(placement string) int64 {
 	b.mu.Lock()
 	defer b.mu.Unlock()
