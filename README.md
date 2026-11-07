@@ -425,7 +425,8 @@ HTTP status. An answer with neither field, or a settle with no 64-byte transacti
 - `late`, `slow` and `stall` set the mode delays, and `redirect_to` where `/redirect/` points.
 - The server reads headers for at most 10 s and has no read or write timeout, so a 150 s
   `/hold/`, a 3-minute `/sse/` and a slow upload are never cut.
-- It logs the address it serves on, and nothing about a request.
+- It logs the address it serves on, and server errors at warn, such as a failed TLS handshake
+  with the client's address. It never logs a payment, a header or a body.
 
 ### The test transfer and the facilitator goldens
 
