@@ -320,6 +320,39 @@ func TestRedirectOnPaidRetry(t *testing.T) {
 	eq(t, w.Header().Get("Location"), "https://example.com/")
 }
 
+func TestConfigDefaults(t *testing.T) {
+	ledger := InMemory()
+	defaults := Config{
+		Late: 20 * time.Second, Slow: 120 * time.Second, Stall: 40 * time.Second,
+		Second: time.Second, SSEEvery: 5 * time.Second, SSEFor: 3 * time.Minute,
+		RedirectTo: "https://example.com/",
+	}
+	no := -time.Nanosecond
+	set := Config{
+		Late: 1, Slow: 2, Stall: 3, Second: 4, SSEEvery: 5, SSEFor: 6,
+		RedirectTo: "https://other.test/",
+	}
+	cases := []struct {
+		name     string
+		in, want Config
+	}{
+		{"zero", Config{}, defaults},
+		{"negative", Config{Late: no, Slow: no, Stall: no, Second: no, SSEEvery: no, SSEFor: no},
+			defaults},
+		{"set", set, set},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tc.in.Settler = ledger
+			s, ok := New(tc.in).(*seller)
+			eq(t, ok, true)
+			got := s.c
+			got.Settler = nil
+			eq(t, got, tc.want)
+		})
+	}
+}
+
 func TestDelaysAreOptions(t *testing.T) {
 	ledger := InMemory()
 	h := New(config(ledger))
