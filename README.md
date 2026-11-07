@@ -199,6 +199,35 @@ send the caller's token only to the router URL and never follow a redirect.
 | `New` | h2c to an `http://` router, else h2 or HTTP/1.1 over TLS | Every call but transfers |
 | `PerCall` | HTTP/1.1, one connection per call | Transfers, so one stalled stalls no other |
 
+## Calling Payments
+
+`x402.Signer` calls Payments' `X402SignerService` (XS 6.10) for egress, over mutual TLS.
+
+| Part | Rule |
+| --- | --- |
+| Connection | TLS 1.3 only, HTTP/2, no environment proxy, no redirect and no trace header |
+| Payments' certificate | Checked against `payments_ca_file` with the name `payments_server_name` |
+| Egress's certificate | `payments_client_cert_file`, sent through `GetClientCertificate` |
+| Egress's key | Read once at start from `$CREDENTIALS_DIRECTORY/<payments_client_key_credential>` |
+| `Reserve` | One `ReserveAndSign` under `payments_timeout`, never retried |
+| `Report` | Queued, then sent by `Run` with up to 3 retries after 0.5, 1 and 2 s |
+| `ReportClean` | Sent at once, ahead of the queue, waiting at most `clean_report_wait` |
+| `Reload` | Reads both files again, keeps the key, and keeps the old files' copy on any error |
+| `Run` | Drains the queue and logs the expiry line |
+
+- `Reserve` fails closed. An answer that is neither a `Refused` nor a `Signed` with a payment id,
+  a payload, a `payment_ref` and an amount is an error, so egress pays nothing with it.
+- The queue holds `report_queue` reports, waiting or in flight. A full queue drops the new report
+  with one log line. A report that fails 4 times is dropped with one log line.
+- Payments' `FailedPrecondition` (`REF_CONFLICT`) and `InvalidArgument` are final. Each is logged
+  once and never retried, so Payments' `x402_ref_conflict` alarm fires once for one fault.
+- A missing or unreadable file, a file with no PEM certificate or key, or a certificate for
+  another key fails `NewSigner`. The error names the setting, never the path or the key.
+- No log line holds a payload, a `ref`, a `payTo`, a target or an error message Payments sent.
+- `Reload` closes idle connections, so the next call makes a handshake with the new files.
+- From 30 days before egress's certificate expires, `Run` logs one error line a day. It names the
+  file and the days left.
+
 ## Traffic
 
 These libraries count, limit and cut each placement's traffic. The edge, the SSH gateway and the
