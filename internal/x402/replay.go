@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-// chunkSize is each read of the body, the only bytes it holds outside the slot
+// chunkSize is the size of each body read, the only room a Replay holds outside its slot
 const chunkSize = 4 << 10
 
 // Replay is a request body kept for one paid retry
@@ -30,11 +30,13 @@ type Replay struct {
 	done chan struct{}
 	// exited closes once the keeping goroutine no longer reads body
 	exited chan struct{}
+	// closed closes once Close ends Upstream
+	closed chan struct{}
 
 	mu sync.Mutex
-	// grown wakes Upstream when buf grows or the keeping stops
+	// grown wakes Upstream when buf grows, the keeping stops or Close is called
 	grown *sync.Cond
-	// buf is the body kept so far in room the size of the slot, nil once Upstream yielded it
+	// buf is the body kept so far in room the size of the slot, nil once Upstream needs none of it
 	buf     []byte
 	stopped bool
 	slot    *Slot
@@ -55,6 +57,7 @@ func ReadReplay(body io.Reader, limit int64, deadline time.Time) *Replay {
 		buf:    make([]byte, 0, limit),
 		done:   make(chan struct{}),
 		exited: make(chan struct{}),
+		closed: make(chan struct{}),
 	}
 	r.grown = sync.NewCond(&r.mu)
 	r.Upstream = &upstream{r: r}
@@ -79,6 +82,30 @@ func (r *Replay) Wait(ctx context.Context) error {
 		return r.err
 	case <-ctx.Done():
 		return ctx.Err()
+	}
+}
+
+// Close ends Upstream, whose reads then give io.ErrClosedPipe, and leaves Kept as it is
+func (r *Replay) Close() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.isClosed() {
+		return
+	}
+	close(r.closed)
+	if r.stopped {
+		r.buf = nil
+	}
+	r.grown.Broadcast()
+}
+
+// isClosed reports whether Close was called
+func (r *Replay) isClosed() bool {
+	select {
+	case <-r.closed:
+		return true
+	default:
+		return false
 	}
 }
 
@@ -145,6 +172,9 @@ func (r *Replay) stop(mark Code) {
 	} else {
 		r.slot.Free()
 	}
+	if r.isClosed() {
+		r.buf = nil
+	}
 	r.grown.Broadcast()
 	close(r.done)
 }
@@ -164,12 +194,18 @@ func (u *upstream) Read(p []byte) (int, error) {
 	}
 	r := u.r
 	if !u.past {
-		if n := u.readKept(p); n > 0 {
-			return n, nil
+		if n, err := u.readKept(p); n > 0 || err != nil {
+			return n, err
 		}
 	}
 
-	<-r.exited
+	select {
+	case <-r.exited:
+	case <-r.closed:
+	}
+	if r.isClosed() {
+		return 0, io.ErrClosedPipe
+	}
 	if len(r.tail) > 0 {
 		n := copy(p, r.tail)
 		r.tail = r.tail[n:]
@@ -182,11 +218,15 @@ func (u *upstream) Read(p []byte) (int, error) {
 }
 
 // readKept yields kept bytes as they land, and lets go of buf with its last byte after the stop
-func (u *upstream) readKept(p []byte) int {
+func (u *upstream) readKept(p []byte) (int, error) {
 	r := u.r
 	r.mu.Lock()
-	for u.sent == len(r.buf) && !r.stopped {
+	for u.sent == len(r.buf) && !r.stopped && !r.isClosed() {
 		r.grown.Wait()
+	}
+	if r.isClosed() {
+		r.mu.Unlock()
+		return 0, io.ErrClosedPipe
 	}
 	kept := r.buf[u.sent:]
 	n := min(len(p), len(kept))
@@ -197,5 +237,5 @@ func (u *upstream) readKept(p []byte) int {
 	r.mu.Unlock()
 	copy(p, kept[:n])
 	u.sent += n
-	return n
+	return n, nil
 }

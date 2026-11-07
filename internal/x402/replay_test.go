@@ -8,15 +8,21 @@ import (
 	"errors"
 	"io"
 	"math/rand/v2"
+	"net"
 	"net/http"
+	"net/http/httptest"
 	"runtime"
+	"sync"
 	"testing"
 	"testing/iotest"
 	"time"
 	"weak"
 )
 
-var errBroken = errors.New("connection reset")
+var (
+	errBroken       = errors.New("connection reset")
+	errStillBlocked = errors.New("still blocked after a second")
+)
 
 // pattern is n bytes that differ from place to place, so a reordered byte shows
 func pattern(n int64) []byte {
@@ -382,4 +388,164 @@ func TestReplayLetsGoOfAMarkedBody(t *testing.T) {
 		eq(t, collected(room), true)
 		runtime.KeepAlive(r)
 	})
+	t.Run("slow and closed unsent", func(t *testing.T) {
+		in, _ := gated(t, pattern(10), nil, nil)
+		r := ReadReplay(in, mib, time.Now().Add(100*time.Millisecond))
+		room := weakRoom(r)
+		wait(t, r)
+		r.Close()
+		eq(t, collected(room), true)
+		runtime.KeepAlive(r)
+	})
+	t.Run("closed before the slow stop", func(t *testing.T) {
+		in, _ := gated(t, pattern(10), nil, nil)
+		r := ReadReplay(in, mib, time.Now().Add(100*time.Millisecond))
+		room := weakRoom(r)
+		r.Close()
+		wait(t, r)
+		eq(t, collected(room), true)
+		runtime.KeepAlive(r)
+	})
+}
+
+// within is what ch gives within a second, else errStillBlocked
+func within(ch <-chan error) error {
+	select {
+	case err := <-ch:
+		return err
+	case <-time.After(time.Second):
+		return errStillBlocked
+	}
+}
+
+// closesWithin reports whether ch closes within a second
+func closesWithin(ch <-chan struct{}) bool {
+	select {
+	case <-ch:
+		return true
+	case <-time.After(time.Second):
+		return false
+	}
+}
+
+func TestReplayCloseEndsUpstream(t *testing.T) {
+	body := pattern(10)
+	in, _ := gated(t, body, nil, nil)
+	r := ReadReplay(in, mib, time.Now().Add(100*time.Millisecond))
+	wait(t, r)
+	eq(t, r.Mark, CodeBodySlow)
+	head := make([]byte, len(body))
+	if _, err := io.ReadFull(r.Upstream, head); err != nil {
+		t.Fatal(err)
+	}
+	same(t, head, body)
+
+	ended := make(chan error, 1)
+	go func() {
+		_, err := r.Upstream.Read(make([]byte, 1))
+		ended <- err
+	}()
+	select {
+	case err := <-ended:
+		t.Fatalf("Upstream ended with %v while the client stalls", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	r.Close()
+	r.Close()
+	eq(t, errors.Is(within(ended), io.ErrClosedPipe), true)
+	_, err := r.Upstream.Read(make([]byte, 1))
+	eq(t, errors.Is(err, io.ErrClosedPipe), true)
+}
+
+func TestReplayCloseLeavesKept(t *testing.T) {
+	body := pattern(10)
+	in, release := gated(t, body[:5], body[5:], nil)
+	r := ReadReplay(in, mib, far())
+	r.Close()
+	_, err := r.Upstream.Read(make([]byte, len(body)))
+	eq(t, errors.Is(err, io.ErrClosedPipe), true)
+
+	close(release)
+	wait(t, r)
+	eq(t, r.Mark, Code(""))
+	same(t, r.Kept, body)
+}
+
+// stalledOutcome is what a handler saw of a client that stalls past the body deadline
+type stalledOutcome struct {
+	mark Code
+	// upstream is what a reader of Upstream got once Close was called
+	upstream error
+	// exited is set when the body's read in flight ended after the read deadline
+	exited bool
+}
+
+// stallingHandler keeps a body that stalls, ends it as the request ends and reports what it saw
+func stallingHandler(got chan<- stalledOutcome) http.HandlerFunc {
+	return func(w http.ResponseWriter, req *http.Request) {
+		r := ReadReplay(req.Body, mib, time.Now().Add(100*time.Millisecond))
+		sent := make(chan error, 1)
+		go func() {
+			_, err := io.Copy(io.Discard, r.Upstream)
+			sent <- err
+		}()
+		ctx, cancel := context.WithTimeout(req.Context(), 2*time.Second)
+		defer cancel()
+		var o stalledOutcome
+		if r.Wait(ctx) == nil {
+			o.mark = r.Mark
+		}
+		r.Close()
+		o.upstream = within(sent)
+		_ = http.NewResponseController(w).SetReadDeadline(time.Now())
+		o.exited = closesWithin(r.exited)
+		got <- o
+		w.WriteHeader(http.StatusPaymentRequired)
+	}
+}
+
+func TestReplayStalledClientEndsWithTheRequest(t *testing.T) {
+	for _, proto := range []string{"HTTP/1.1", "HTTP/2.0"} {
+		t.Run(proto, func(t *testing.T) {
+			got := make(chan stalledOutcome, 1)
+			srv := httptest.NewUnstartedServer(stallingHandler(got))
+			closed := make(chan struct{})
+			var once sync.Once
+			srv.Config.ConnState = func(_ net.Conn, s http.ConnState) {
+				if s == http.StateClosed {
+					once.Do(func() { close(closed) })
+				}
+			}
+			if proto == "HTTP/2.0" {
+				srv.EnableHTTP2 = true
+				srv.StartTLS()
+			} else {
+				srv.Start()
+			}
+			defer srv.Close()
+
+			pr, pw := io.Pipe()
+			defer func() { _ = pw.Close() }()
+			go func() { _, _ = pw.Write(pattern(10)) }()
+			req, err := http.NewRequest(http.MethodPost, srv.URL, pr)
+			if err != nil {
+				t.Fatal(err)
+			}
+			res, err := srv.Client().Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = res.Body.Close() }()
+			eq(t, res.Proto, proto)
+			eq(t, res.StatusCode, http.StatusPaymentRequired)
+
+			o := <-got
+			eq(t, o.mark, CodeBodySlow)
+			eq(t, errors.Is(o.upstream, io.ErrClosedPipe), true)
+			eq(t, o.exited, true)
+			if proto == "HTTP/1.1" && !closesWithin(closed) {
+				t.Fatal("the server still holds the connection")
+			}
+		})
+	}
 }
