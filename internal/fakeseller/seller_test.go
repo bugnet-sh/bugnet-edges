@@ -8,6 +8,8 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -85,6 +87,34 @@ func TestSettleOutlivesTheCaller(t *testing.T) {
 	h.ServeHTTP(httptest.NewRecorder(), r)
 	eq(t, p.calls(), []error{nil})
 	eq(t, len(p.ledger.Transfers()), 1)
+}
+
+func TestSlowAnswersAFailedSettle(t *testing.T) {
+	blockHeight := "settle_exact_svm_block_height_exceeded"
+	for _, c := range []struct {
+		fail   error
+		reason string
+	}{
+		{fmt.Errorf("facilitator: %w", &SettleError{Reason: blockHeight}), blockHeight},
+		{errors.New("no route to the facilitator"), "unexpected_settle_error"},
+		{&SettleError{}, "unexpected_settle_error"},
+	} {
+		p := &probe{ledger: InMemory(), fail: c.fail}
+		h := probed(p)
+		w, _ := paid(t, h, "/slow/x", "r1")
+		eq(t, w.Code, http.StatusOK)
+		eq(t, settle(t, w), map[string]any{
+			"success": false, "errorReason": c.reason, "transaction": "",
+			"network": x402.SolanaMainnet,
+		})
+		hint := x402.ParseResponse(w.Result().Header.Values("Payment-Response"))
+		eq(t, hint, x402.Hint{Kind: x402.HintFailure, Error: c.reason})
+
+		w, _ = paid(t, h, "/ok/x", "r2")
+		required(t, w)
+		eq(t, settle(t, w), map[string]any(nil))
+		eq(t, len(p.calls()), 2)
+	}
 }
 
 func TestSwitchTakesAnEarlierPayTo(t *testing.T) {

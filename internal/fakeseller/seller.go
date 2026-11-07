@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"reflect"
@@ -30,6 +31,16 @@ type Payment struct {
 // Settler completes and submits a payer's transfer, answering its signature
 type Settler interface {
 	Settle(ctx context.Context, p Payment) (string, error)
+}
+
+// SettleError is a failed settle with the errorReason a facilitator gave
+type SettleError struct {
+	Reason string
+}
+
+// Error names the reason
+func (e *SettleError) Error() string {
+	return "fakeseller: settle failed with " + e.Reason
 }
 
 // Config is one seller
@@ -71,6 +82,8 @@ const (
 	maxBody = 8 << 20
 	// lateReason is the errorReason /late/ answers, a facilitator's confirmation timeout
 	lateReason = "settle_exact_svm_transaction_confirmation_timed_out"
+	// unexpectedReason is the errorReason of a failed settle that gave none
+	unexpectedReason = "unexpected_settle_error"
 )
 
 // pidID is the shape of a payment-identifier id, as the x402 extension's schema allows
@@ -387,7 +400,11 @@ func (s *seller) pay(
 		}
 	}
 	sig, err := s.settle(context.WithoutCancel(r.Context()), payment)
-	if err != nil {
+	switch {
+	case err != nil && rt.name == "slow":
+		s.unsettled(rt, r, body, entry.Network, reasonOf(err)).write(w)
+		return
+	case err != nil:
 		s.require(w, r, rt)
 		return
 	}
@@ -398,6 +415,15 @@ func (s *seller) pay(
 		s.mu.Unlock()
 	}
 	a.write(w)
+}
+
+// reasonOf is the errorReason of a failed settle, the Settler's own when it gave one
+func reasonOf(err error) string {
+	var se *SettleError
+	if errors.As(err, &se) && se.Reason != "" {
+		return se.Reason
+	}
+	return unexpectedReason
 }
 
 // unsettled is a mode's 200 whose PAYMENT-RESPONSE says success false with reason

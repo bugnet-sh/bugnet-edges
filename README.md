@@ -274,7 +274,9 @@ takes the fixed test format of the fake Payments in `x402test` and needs no chai
 - The 402 comes before the seller reads the body, as x402 middleware does. Only `/post400/`
   reads it first. A paid answer reads it and gives its length and SHA-256.
 - A payment passes when its `accepted` equals an entry the seller offered on that prefix. A
-  payload seen before gets a new 402, except on `/pid/`.
+  payload seen before gets a new 402, except on `/pid/`. So does a failed settle, except on
+  `/slow/`, which answers 200 with `success: false`. A `Settler` names that `errorReason` with
+  `SettleError`, else it is `unexpected_settle_error`.
 - `/echo/`'s body gives `PAYMENT-SIGNATURE` only as its SHA-256, so no payload reaches a body.
 - With `TestToken` set, `GET /__test/payloads` and `GET /__test/settled` list the payloads
   received and the signatures settled, for that bearer token only. Without it they are 404.
