@@ -2,6 +2,7 @@ package fakeseller
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"net/http"
@@ -101,7 +102,7 @@ func extra(t *testing.T, entry json.RawMessage) map[string]any {
 	return m
 }
 
-// pay is the fixed test payment of Task X27 for the entry of the 402 in w
+// pay is x402test's fixed test payment for the entry of the 402 in w
 func pay(t *testing.T, w *httptest.ResponseRecorder, ref string) string {
 	t.Helper()
 	_, entry := required(t, w)
@@ -134,6 +135,41 @@ func settle(t *testing.T, w *httptest.ResponseRecorder) map[string]any {
 		t.Fatal(err)
 	}
 	return m
+}
+
+// probe settles in a Ledger, keeping each call's context error
+type probe struct {
+	ledger *Ledger
+	// fail is answered in place of settling when not nil
+	fail error
+
+	mu   sync.Mutex
+	errs []error
+}
+
+// Settle records the call, then fails or settles
+func (p *probe) Settle(ctx context.Context, pm Payment) (string, error) {
+	p.mu.Lock()
+	p.errs = append(p.errs, ctx.Err())
+	p.mu.Unlock()
+	if p.fail != nil {
+		return "", p.fail
+	}
+	return p.ledger.Settle(ctx, pm)
+}
+
+// calls lists each call's context error, in order
+func (p *probe) calls() []error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([]error{}, p.errs...)
+}
+
+// probed is a seller settling through p
+func probed(p *probe) http.Handler {
+	c := config(p.ledger)
+	c.Settler = p
+	return New(c)
 }
 
 // signatures lists the signatures a ledger answered, in order

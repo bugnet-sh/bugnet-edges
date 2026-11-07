@@ -50,6 +50,59 @@ func TestOkSettlesOnce(t *testing.T) {
 	eq(t, len(ledger.Transfers()), 1)
 }
 
+func TestRepeatedPayloadGetsA402(t *testing.T) {
+	for _, target := range []string{"/ok/x", "/late/x", "/lie/x", "/slow/x", "/silent/x"} {
+		t.Run(strings.Split(target, "/")[1], func(t *testing.T) {
+			p := &probe{ledger: InMemory()}
+			h := probed(p)
+			w, value := paid(t, h, target, "r1")
+			eq(t, w.Code, http.StatusOK)
+			if target != "/lie/x" {
+				within(t, func() bool { return len(p.calls()) == 1 })
+			}
+			calls := len(p.calls())
+			again := send(h, http.MethodGet, target, paying(value), "")
+			required(t, again)
+			eq(t, settle(t, again), map[string]any(nil))
+			if target == "/late/x" {
+				time.Sleep(100 * time.Millisecond)
+			}
+			eq(t, len(p.calls()), calls)
+		})
+	}
+}
+
+func TestSettleOutlivesTheCaller(t *testing.T) {
+	p := &probe{ledger: InMemory()}
+	h := probed(p)
+	value := pay(t, first(h, "/ok/x"), "r1")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	r := httptest.NewRequestWithContext(ctx, http.MethodGet, "/ok/x", nil)
+	r.Header.Set("Payment-Signature", value)
+	h.ServeHTTP(httptest.NewRecorder(), r)
+	eq(t, p.calls(), []error{nil})
+	eq(t, len(p.ledger.Transfers()), 1)
+}
+
+func TestSwitchTakesAnEarlierPayTo(t *testing.T) {
+	ledger := InMemory()
+	h := New(config(ledger))
+	_, older := required(t, first(h, "/switch/x"))
+	_, newer := required(t, first(h, "/switch/x"))
+	w := send(h, http.MethodGet, "/switch/x", paying(x402test.PaymentSignature(older, "r1")), "")
+	eq(t, w.Code, http.StatusOK)
+	eq(t, settle(t, w)["success"], any(true))
+	eq(t, ledger.Transfers()[0].Accepted.PayTo, fields(t, older)["payTo"].(string))
+
+	for range maxOffered {
+		required(t, first(h, "/switch/x"))
+	}
+	w = send(h, http.MethodGet, "/switch/x", paying(x402test.PaymentSignature(newer, "r2")), "")
+	required(t, w)
+	eq(t, len(ledger.Transfers()), 1)
+}
+
 func TestPaidAnswerCountsTheBody(t *testing.T) {
 	h := New(config(InMemory()))
 	value := pay(t, send(h, http.MethodPost, "/cent/x", nil, "abc"), "r1")
