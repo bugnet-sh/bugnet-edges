@@ -492,9 +492,11 @@ when one placement has built up the threshold (8 MiB).
   interval, not at every threshold.
 - `SetRemaining` sets the bytes left from a resolve, a lease check or an event. The lease table's
   `OnState` gives it each one.
-- An answer to a report sent before the last `SetRemaining` keeps that newer figure.
+- An answer to a report sent before the last `SetRemaining` keeps that newer figure, even when a
+  `Drop` came between. One sequence for the whole process orders them, never one per placement.
 - `Drop` forgets a placement's figure. Its unsent bytes still go out, and answers about it change
-  nothing until the next `SetRemaining`.
+  nothing until the next `SetRemaining`. Bytes counted after a `Drop` and before the next
+  `SetRemaining` never call `OnAnswer`, so they never cut on a figure the reporter lacks.
 - A threshold of 0 turns threshold reports off.
 - When `Run` stops, it sends what is left once.
 

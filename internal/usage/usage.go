@@ -29,8 +29,10 @@ type Reporter struct {
 	threshold int64
 	flush     chan struct{}
 
-	mu       sync.Mutex
-	entries  map[string]*entry
+	mu      sync.Mutex
+	entries map[string]*entry
+	// seq numbers every SetRemaining and Drop in the process, so it never restarts with an entry
+	seq      uint64
 	onAnswer func(placement string, remaining, pace uint64)
 	// held keeps threshold reports back after a failed one, until the next interval
 	held bool
@@ -42,7 +44,7 @@ type entry struct {
 	known     bool
 	remaining uint64
 	pace      uint64
-	// set counts SetRemaining and Drop calls, so an answer to an older report keeps their figure
+	// set is the Reporter's seq at the last SetRemaining or Drop, so older answers keep its figure
 	set uint64
 	// dropped keeps answers from bringing back a figure until the next SetRemaining
 	dropped bool
@@ -104,7 +106,8 @@ func (r *Reporter) SetRemaining(placement string, remaining uint64) {
 	e := r.entry(placement)
 	e.known = true
 	e.remaining = remaining
-	e.set++
+	r.seq++
+	e.set = r.seq
 	e.dropped = false
 }
 
@@ -114,7 +117,8 @@ func (r *Reporter) Drop(placement string) {
 	defer r.mu.Unlock()
 	if e, ok := r.entries[placement]; ok {
 		e.known = false
-		e.set++
+		r.seq++
+		e.set = r.seq
 		e.dropped = true
 		r.tidy(placement, e)
 	}
@@ -218,6 +222,10 @@ func (r *Reporter) report(ctx context.Context) {
 		if e.set == set[id] {
 			e.known = true
 			e.remaining = left - min(left, uint64(e.in+e.out))
+		}
+		// An entry made again after a Drop holds no figure until its own SetRemaining
+		if !e.known {
+			continue
 		}
 		calls = append(calls, answered{id, e.remaining, e.pace})
 	}

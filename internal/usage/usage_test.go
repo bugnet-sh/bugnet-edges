@@ -367,6 +367,56 @@ func TestReporterLateAnswerKeepsANewerFigure(t *testing.T) {
 	})
 }
 
+func TestReporterLateAnswerKeepsAFigureSetAfterADrop(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		r := newRouter()
+		r.remaining = map[string]uint64{"p1": 1 * mib}
+		hold := make(chan struct{})
+		r.hold = hold
+		rep, a, _ := start(t, r)
+		rep.SetRemaining("p1", 100*mib)
+		rep.Add("p1", 8*mib, 0)
+		synctest.Wait()
+
+		// The lease ends and a new one starts while the report is out
+		rep.Drop("p1")
+		eq(t, rep.size(), 0)
+		rep.SetRemaining("p1", 2048*mib)
+		r.set(func(r *router) { r.hold = nil })
+		close(hold)
+		synctest.Wait()
+		eq(t, a.take(), []answer{{"p1", 2048 * mib, 0}})
+
+		rep.Add("p1", 0, 2*mib)
+		synctest.Wait()
+		eq(t, a.take(), []answer(nil))
+		time.Sleep(5 * time.Second)
+		synctest.Wait()
+		eq(t, a.take(), []answer{{"p1", 1 * mib, 0}})
+	})
+}
+
+func TestReporterAnswerForANewEntryWithoutAFigureNeverCuts(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		r := newRouter()
+		r.remaining = map[string]uint64{"p1": 1 * mib}
+		hold := make(chan struct{})
+		r.hold = hold
+		rep, a, _ := start(t, r)
+		rep.SetRemaining("p1", 100*mib)
+		rep.Add("p1", 8*mib, 0)
+		synctest.Wait()
+
+		// Bytes arrive for the placement after its drop, before any new figure
+		rep.Drop("p1")
+		rep.Add("p1", 1, 0)
+		r.set(func(r *router) { r.hold = nil })
+		close(hold)
+		synctest.Wait()
+		eq(t, a.take(), []answer(nil))
+	})
+}
+
 func TestReporterDroppedPlacementIsForgottenOnceReported(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		r := newRouter()
