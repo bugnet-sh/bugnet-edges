@@ -12,3 +12,8 @@ func eq[T any](t *testing.T, got, want T) {
 		t.Fatalf("got %+v, want %+v", got, want)
 	}
 }
+
+// ptr is a pointer to a copy of v
+func ptr[T any](v T) *T {
+	return &v
+}

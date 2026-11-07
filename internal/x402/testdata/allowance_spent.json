@@ -1,0 +1,1 @@
+{"error":{"message":"Bugnet did not pay this call (x402 allowance_spent): the sandbox's x402 allowance is spent. The agent can add more with the user's approval.","type":"bugnet_x402","code":"allowance_spent"},"bugnet_x402":{"host":"agent402.tools","asked_usd":"0.01","max_usd":"0.01","left_usd":"0.00"}}
