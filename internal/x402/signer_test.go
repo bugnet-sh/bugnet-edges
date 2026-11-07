@@ -9,6 +9,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"path/filepath"
 	"strings"
@@ -20,6 +21,7 @@ import (
 	"github.com/oynozan/bugnet-edges/internal/settings"
 	"github.com/oynozan/bugnet-edges/internal/x402/x402test"
 	paymentsv1 "github.com/oynozan/bugnet-proto/gen/go/bugnet/payments/v1"
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -269,6 +271,50 @@ func TestReserveDeadline(t *testing.T) {
 	}
 	eq(t, len(e.fake.Reserves()), 1)
 	eq(t, len(e.fake.Calls()), 1)
+	recs := e.logs.records(t, msgReserveFailed)
+	eq(t, len(recs), 1)
+	eq(t, recs[0]["level"], any("WARN"))
+	eq(t, recs[0]["code"], any("deadline_exceeded"))
+}
+
+func TestReserveQuietWhenTheCallerLeaves(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		code connect.Code
+		ctx  func() (context.Context, context.CancelFunc)
+	}{
+		{"cancelled", connect.CodeCanceled, func() (context.Context, context.CancelFunc) {
+			return context.WithCancel(context.Background())
+		}},
+		{"its own deadline", connect.CodeDeadlineExceeded,
+			func() (context.Context, context.CancelFunc) {
+				return context.WithTimeout(context.Background(), 100*time.Millisecond)
+			}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newSignerEnv(t)
+			s := e.signer(t)
+			e.fake.Hold()
+			ctx, cancel := tc.ctx()
+			defer cancel()
+			done := make(chan error, 1)
+			go func() {
+				_, err := s.Reserve(ctx, reserveRequest("aaaaaaaaaaaaaaaa"))
+				done <- err
+			}()
+			waitFor(t, "the held reserve", func() bool { return len(e.fake.Reserves()) == 1 })
+			if tc.code == connect.CodeCanceled {
+				cancel()
+			}
+			select {
+			case err := <-done:
+				eq(t, connect.CodeOf(err), tc.code)
+			case <-time.After(2 * time.Second):
+				t.Fatal("Reserve outlived its caller")
+			}
+			eq(t, len(e.logs.records(t, msgReserveFailed)), 0)
+		})
+	}
 }
 
 func TestReservePassesARefusal(t *testing.T) {
@@ -385,6 +431,18 @@ func TestReportRefConflictNotRetried(t *testing.T) {
 				return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("bad hint_tx"))
 			},
 		},
+		{
+			name: "a reason of 64", code: "failed_precondition", reason: strings.Repeat("R", 64),
+			answer: anyReport, hook: refuseWith(strings.Repeat("R", 64)),
+		},
+		{
+			name: "a lower case reason", code: "failed_precondition",
+			answer: anyReport, hook: refuseWith("ref_conflict"),
+		},
+		{
+			name: "a reason over 64", code: "failed_precondition",
+			answer: anyReport, hook: refuseWith(strings.Repeat("R", 65)),
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			e := newSignerEnv(t)
@@ -399,8 +457,12 @@ func TestReportRefConflictNotRetried(t *testing.T) {
 			eq(t, len(e.fake.Reports()), 0)
 			rec := e.logs.records(t, msgReportRefused)[0]
 			eq(t, rec["code"], any(tc.code))
+			reason, has := rec["reason"]
+			if tc.reason == "" && has {
+				t.Fatalf("logged the reason %q, which is not shaped as Payments spells one", reason)
+			}
 			if tc.reason != "" {
-				eq(t, rec["reason"], any(tc.reason))
+				eq(t, reason, any(tc.reason))
 			}
 			eq(t, len(e.logs.records(t, msgReportDropped)), 0)
 		})
@@ -581,4 +643,119 @@ func TestSignerLogsNoPayload(t *testing.T) {
 			t.Fatalf("the logs hold %q:\n%s", secret, logs)
 		}
 	}
+}
+
+func TestSignerLogsNoPaymentsText(t *testing.T) {
+	const (
+		marker     = "zq-payments-own-words-41"
+		ref        = "aaaaaaaaaaaaaaaa"
+		paymentRef = "pref_eeeeeeeeeeee"
+		paymentID  = "pay_7c1e"
+		host       = "api.example.com"
+	)
+	text := fmt.Sprintf("%s: ref %s, payment_ref %s, payment %s, pay_to %s, host %s",
+		marker, ref, paymentRef, paymentID, testPayTo, host)
+	meta := map[string]string{
+		"ref": ref, "payment_ref": paymentRef, "payment_id": paymentID, "pay_to": testPayTo,
+		"note": marker,
+	}
+	onReport := func(code connect.Code, reason string) x402test.ReportFunc {
+		return func(context.Context, int, *paymentsv1.ReportOutcomeRequest) (
+			*paymentsv1.ReportOutcomeResponse, error,
+		) {
+			return nil, paymentsError(code, text, reason, meta)
+		}
+	}
+	for _, tc := range []struct {
+		name, msg, code, reason string
+		act                     func(*testing.T, *signerEnv, *Signer)
+	}{
+		{
+			name: "a refused report", msg: msgReportRefused, code: "failed_precondition",
+			reason: "REF_CONFLICT",
+			act: func(_ *testing.T, e *signerEnv, s *Signer) {
+				e.fake.OnReport(onReport(connect.CodeFailedPrecondition, "REF_CONFLICT"))
+				s.Report(report(paymentID, ref))
+			},
+		},
+		{
+			name: "a refused clean report", msg: msgReportRefused, code: "failed_precondition",
+			reason: "REF_CONFLICT",
+			act: func(t *testing.T, e *signerEnv, s *Signer) {
+				e.fake.OnReport(onReport(connect.CodeFailedPrecondition, "REF_CONFLICT"))
+				if _, ok := s.ReportClean(context.Background(), report(paymentID, ref)); ok {
+					t.Fatal("want a refusal")
+				}
+			},
+		},
+		{
+			name: "a dropped report", msg: msgReportDropped, code: "unavailable",
+			reason: "PAYMENTS_DRAINING",
+			act: func(_ *testing.T, e *signerEnv, s *Signer) {
+				e.fake.OnReport(onReport(connect.CodeUnavailable, "PAYMENTS_DRAINING"))
+				s.Report(report(paymentID, ref))
+			},
+		},
+		{
+			name: "a failed reserve", msg: msgReserveFailed, code: "internal",
+			reason: "SIGNER_FAULT",
+			act: func(t *testing.T, e *signerEnv, s *Signer) {
+				e.fake.OnReserve(func(context.Context, *paymentsv1.ReserveAndSignRequest) (
+					*paymentsv1.ReserveAndSignResponse, error,
+				) {
+					return nil, paymentsError(connect.CodeInternal, text, "SIGNER_FAULT", meta)
+				})
+				if _, err := s.Reserve(context.Background(), reserveRequest(ref)); err == nil {
+					t.Fatal("want an error")
+				}
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newSignerEnv(t)
+			s := e.signer(t)
+			run(t, s)
+			tc.act(t, e, s)
+			waitFor(t, "the line", func() bool { return len(e.logs.records(t, tc.msg)) == 1 })
+			rec := e.logs.records(t, tc.msg)[0]
+			eq(t, rec["code"], any(tc.code))
+			eq(t, rec["reason"], any(tc.reason))
+			if _, has := rec["err"]; has {
+				t.Fatalf("the line quotes Payments' error: %v", rec)
+			}
+			logs := e.logs.String()
+			for _, kept := range []string{marker, ref, paymentRef, paymentID, testPayTo, host} {
+				if strings.Contains(logs, kept) {
+					t.Fatalf("the logs hold %q:\n%s", kept, logs)
+				}
+			}
+		})
+	}
+}
+
+// anyReport is a report for a payment the fake never signed
+func anyReport(*testing.T, *Signer) *paymentsv1.ReportOutcomeRequest {
+	return report("pay_9", "aaaaaaaaaaaaaaaa")
+}
+
+// refuseWith answers every report FailedPrecondition with an ErrorInfo of reason
+func refuseWith(reason string) x402test.ReportFunc {
+	return func(context.Context, int, *paymentsv1.ReportOutcomeRequest) (
+		*paymentsv1.ReportOutcomeResponse, error,
+	) {
+		return nil, paymentsError(connect.CodeFailedPrecondition, "refused", reason, nil)
+	}
+}
+
+// paymentsError is an error as Payments sends one, with an ErrorInfo of reason and meta
+func paymentsError(code connect.Code, text, reason string, meta map[string]string) error {
+	err := connect.NewError(code, errors.New(text))
+	d, derr := connect.NewErrorDetail(&errdetails.ErrorInfo{
+		Reason: reason, Domain: "bugnet.payments", Metadata: meta,
+	})
+	if derr != nil {
+		panic(derr)
+	}
+	err.AddDetail(d)
+	return err
 }
