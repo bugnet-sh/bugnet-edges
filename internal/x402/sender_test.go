@@ -289,7 +289,7 @@ func TestRetryRules(t *testing.T) {
 		eq(t, len(logs.records(t, msgEventSent)), 3)
 	})
 
-	t.Run("a flush cut by the end of Run counts no try", func(t *testing.T) {
+	t.Run("a flush on a context already ended counts no try", func(t *testing.T) {
 		e, s, clk, logs := newTestEvents(t)
 		e.Add("pl_a", eventCall(EventFree, "", eventAt(5)))
 		cut, cancel := context.WithCancel(context.Background())
@@ -297,8 +297,35 @@ func TestRetryRules(t *testing.T) {
 		for range 6 {
 			e.flushAll(cut)
 		}
+		eq(t, len(s.drain()), 0)
 		clk.set(eventAt(10))
 		eq(t, len(flushed(t, e, s, "pl_a")), 1)
+		eq(t, len(logs.records(t, msgEventDropped)), 0)
+	})
+
+	t.Run("a send in flight when Run ends counts no try", func(t *testing.T) {
+		e, s, _, logs := newTestEvents(t)
+		s.answerWith(func(
+			ctx context.Context, call int,
+		) (*routerv1.AppendX402EventsResponse, error) {
+			switch {
+			case call < 4:
+				return unavailable(ctx, call)
+			case call == 4:
+				return hang(ctx, call)
+			}
+			return &routerv1.AppendX402EventsResponse{}, nil
+		})
+		tick, stop := runEvents(t, e)
+		e.Add("pl_a", eventCall(EventFree, "", eventAt(5)))
+		// Three failed sends leave the row one try from its drop, and the fourth hangs
+		for range 4 {
+			tick <- time.Now()
+			s.next(t)
+		}
+		stop()
+		eq(t, len(s.drain()), 1)
+		eq(t, len(logs.records(t, msgEventSent)), 1)
 		eq(t, len(logs.records(t, msgEventDropped)), 0)
 	})
 }
