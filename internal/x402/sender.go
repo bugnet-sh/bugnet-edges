@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"slices"
+	"sync"
 	"time"
 
 	"connectrpc.com/connect"
@@ -20,6 +21,8 @@ const (
 const (
 	// maxBatch is the most events one AppendX402Events call carries
 	maxBatch = 50
+	// sendWorkers is how many placements one flush sends to at once
+	sendWorkers = 8
 	// rowRetries is how often a row that cannot involve money is sent again after a failure
 	rowRetries = 3
 	// moneyRetry is how long a money row is sent again after its first failure
@@ -67,9 +70,7 @@ func (e *Events) Run(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			last, cancel := context.WithTimeout(context.WithoutCancel(ctx), e.flush)
-			e.flushRound(last, roundLast)
-			cancel()
+			e.flushRound(context.WithoutCancel(ctx), roundLast)
 			return
 		case <-tick:
 			e.flushAll(ctx)
@@ -116,21 +117,32 @@ func (e *Events) take(r round) []outgoing {
 	return out
 }
 
-// flushRound sends the round's queues in batches and puts back the rows to send again
+// flushRound sends the round's queues, a few placements at once, all within one flush interval
 func (e *Events) flushRound(ctx context.Context, r round) {
 	out := e.take(r)
-	for i, o := range out {
-		if !e.sendRows(ctx, o, r == roundLast) {
-			for _, rest := range out[i+1:] {
-				e.requeue(rest.placement, rest.rows)
-			}
-			return
-		}
+	if len(out) == 0 {
+		return
 	}
+	budget, cancel := context.WithTimeout(ctx, e.flush)
+	defer cancel()
+	work := make(chan outgoing)
+	var wg sync.WaitGroup
+	for range min(len(out), sendWorkers) {
+		wg.Go(func() {
+			for o := range work {
+				e.sendRows(ctx, budget, o, r == roundLast)
+			}
+		})
+	}
+	for _, o := range out {
+		work <- o
+	}
+	close(work)
+	wg.Wait()
 }
 
-// sendRows sends one placement's rows, money rows first, false when ctx ended on the way
-func (e *Events) sendRows(ctx context.Context, o outgoing, last bool) bool {
+// sendRows sends one placement's rows within the round's budget, money rows first
+func (e *Events) sendRows(ctx, budget context.Context, o outgoing, last bool) {
 	slices.SortStableFunc(o.rows, func(a, b *eventRow) int {
 		switch {
 		case a.money == b.money:
@@ -142,24 +154,28 @@ func (e *Events) sendRows(ctx context.Context, o outgoing, last bool) bool {
 	})
 	var keep []*eventRow
 	for rows := o.rows; len(rows) > 0; {
+		if budget.Err() != nil && !last {
+			// Rows the round had no time left to start wait for the next round with no try counted
+			e.requeue(o.placement, append(keep, rows...))
+			return
+		}
 		batch := rows[:min(len(rows), maxBatch)]
 		rows = rows[len(batch):]
-		err := e.sendBatch(ctx, o.placement, batch)
+		err := e.sendBatch(budget, o.placement, batch)
 		switch {
 		case err == nil:
 		case ctx.Err() != nil && !last:
 			// Rows cut by the end of Run go out with its last flush, with no try counted
 			e.requeue(o.placement, append(append(keep, batch...), rows...))
-			return false
+			return
 		default:
 			keep = append(keep, e.failed(o.placement, batch, err, last)...)
 		}
 	}
 	e.requeue(o.placement, keep)
-	return true
 }
 
-// sendBatch sends one batch within the flush interval and logs each row the router answered for
+// sendBatch sends one batch and logs each row the router answered for
 func (e *Events) sendBatch(ctx context.Context, placement string, batch []*eventRow) error {
 	req := &routerv1.AppendX402EventsRequest{
 		PlacementId: placement, Events: make([]*routerv1.X402Event, len(batch)),
@@ -167,9 +183,7 @@ func (e *Events) sendBatch(ctx context.Context, placement string, batch []*event
 	for i, r := range batch {
 		req.Events[i] = r.ev
 	}
-	call, cancel := context.WithTimeout(ctx, e.flush)
-	res, err := e.send(call, req)
-	cancel()
+	res, err := e.send(ctx, req)
 	if err != nil {
 		return err
 	}

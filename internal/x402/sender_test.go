@@ -392,6 +392,70 @@ func TestSendCutAtTheFlushInterval(t *testing.T) {
 	eq(t, refsOf(again), refsOf(first))
 }
 
+func TestSlowPlacementHoldsNoOther(t *testing.T) {
+	s := &sink{batches: make(chan *routerv1.AppendX402EventsRequest, 16)}
+	release := make(chan struct{})
+	free := sync.OnceFunc(func() { close(release) })
+	t.Cleanup(free)
+	s.answerWith(func(ctx context.Context, _ int) (*routerv1.AppendX402EventsResponse, error) {
+		select {
+		case <-release:
+			return &routerv1.AppendX402EventsResponse{}, nil
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	})
+	// Every send waits for the test, so one placement at a time starts a single send in 1 s
+	e := NewEvents(s.send, 1500*time.Millisecond, time.Now, nil)
+	for i := range sendWorkers {
+		e.Add(fmt.Sprintf("pl_%d", i), paidCall(eventHost, time.Now()))
+	}
+	done := make(chan struct{})
+	go func() {
+		e.flushAll(context.Background())
+		close(done)
+	}()
+	var started []string
+	for range sendWorkers {
+		started = append(started, s.next(t).GetPlacementId())
+	}
+	free()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("the flush did not end once the router answered")
+	}
+	slices.Sort(started)
+	eq(t, len(slices.Compact(started)), sendWorkers)
+}
+
+func TestRoundEndsWithinOneInterval(t *testing.T) {
+	s := &sink{batches: make(chan *routerv1.AppendX402EventsRequest, 64)}
+	s.answerWith(hang)
+	logs := &logBuf{}
+	e := NewEvents(s.send, 100*time.Millisecond, time.Now,
+		slog.New(slog.NewJSONHandler(logs, nil)))
+	const placements = sendWorkers + 1
+	for i := range placements {
+		e.Add(fmt.Sprintf("pl_%d", i), eventCall(EventFree, "", time.Now()))
+	}
+	for range 4 {
+		start := time.Now()
+		e.flushAll(context.Background())
+		if took := time.Since(start); took > 500*time.Millisecond {
+			t.Fatalf("a round on a router that never answers took %v", took)
+		}
+	}
+	// Each round had time for sendWorkers sends, and a row it never started keeps its try
+	drops := len(logs.records(t, msgEventDropped))
+	if drops == 0 || drops >= placements {
+		t.Fatalf("%d of %d rows dropped after 4 rounds", drops, placements)
+	}
+	s.answerWith(nil)
+	e.flushAll(context.Background())
+	eq(t, len(logs.records(t, msgEventSent))+drops, placements)
+}
+
 func TestEventLogsHoldNoSecrets(t *testing.T) {
 	e, s, clk, logs := newTestEvents(t)
 	const placement = "pl_secretplacement01"
