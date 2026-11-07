@@ -132,6 +132,26 @@ func TestSettingsBounds(t *testing.T) {
 			[]string{"x402.payments_url"}, ""},
 		{"url not a url", func(s *Settings) { s.PaymentsURL = "https://pay ments\x7f" },
 			[]string{"x402.payments_url"}, "pay ments"},
+		{"url with a password", func(s *Settings) {
+			s.PaymentsURL = "https://egress:hunter2@127.0.0.1:8449/?x#y"
+		}, []string{"x402.payments_url"}, "hunter2"},
+		{"url with a user", func(s *Settings) {
+			s.PaymentsURL = "https://egress-user@127.0.0.1:8449"
+		}, []string{"x402.payments_url"}, "egress-user"},
+		{"url with an empty user", func(s *Settings) { s.PaymentsURL = "https://@127.0.0.1:8449" },
+			[]string{"x402.payments_url"}, ""},
+		{"url with a query", func(s *Settings) {
+			s.PaymentsURL = "https://127.0.0.1:8449/?token=t0k3n"
+		}, []string{"x402.payments_url"}, "t0k3n"},
+		{"url with an empty query", func(s *Settings) {
+			s.PaymentsURL = "https://127.0.0.1:8449/?"
+		}, []string{"x402.payments_url"}, ""},
+		{"url with a fragment", func(s *Settings) {
+			s.PaymentsURL = "https://127.0.0.1:8449/#fr4gment"
+		}, []string{"x402.payments_url"}, "fr4gment"},
+		{"url with an empty fragment", func(s *Settings) {
+			s.PaymentsURL = "https://127.0.0.1:8449/#"
+		}, []string{"x402.payments_url"}, ""},
 		{"empty server name", func(s *Settings) { s.PaymentsServerName = "" },
 			[]string{"x402.payments_server_name"}, ""},
 		{"server name with a port", func(s *Settings) {
@@ -226,6 +246,7 @@ func TestSettingsBounds(t *testing.T) {
 		}},
 		{"floor of 1", func(s *Settings) { s.HostRateFloorPerPlacement = 1 }},
 		{"url with a host name", func(s *Settings) { s.PaymentsURL = "https://payments.internal" }},
+		{"url with a final slash", func(s *Settings) { s.PaymentsURL = "https://127.0.0.1:8449/" }},
 		{"credential with dots", func(s *Settings) {
 			s.PaymentsClientKeyCredential = "x402.key-1"
 		}},

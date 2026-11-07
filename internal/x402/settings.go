@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/oynozan/bugnet-edges/internal/hostname"
@@ -145,8 +146,10 @@ func (s Settings) Check() error {
 // checkPayments holds the keys that say where Payments is and how egress proves itself to it
 func (s Settings) checkPayments() error {
 	u, err := url.Parse(s.PaymentsURL)
-	if err != nil || u.Scheme != "https" || u.Hostname() == "" {
-		return errors.New("x402.payments_url must be an https URL with a host")
+	if err != nil || u.Scheme != "https" || u.Hostname() == "" || u.User != nil ||
+		strings.ContainsAny(s.PaymentsURL, "?#") {
+		return errors.New("x402.payments_url must be an https URL with a host and no user, " +
+			"query or fragment")
 	}
 	if !hostname.Valid(s.PaymentsServerName) {
 		return errors.New("x402.payments_server_name must be a lowercase host name with no " +
