@@ -1,6 +1,7 @@
 package certs
 
 import (
+	"crypto/tls"
 	"crypto/x509"
 	"encoding/pem"
 	"errors"
@@ -140,6 +141,98 @@ func TestCertsFailedRenewalExitsOne(t *testing.T) {
 		t.Fatalf("errors %v", errs)
 	}
 	eq(t, Run(t.Context(), config(a), nil, l.logger(), time.Now()), false)
+}
+
+// pairIn fails the test unless dir holds a fullchain.pem and key.pem that form a pair
+func pairIn(t *testing.T, dir string) {
+	t.Helper()
+	chain, err := os.ReadFile(filepath.Join(dir, "fullchain.pem"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, err := os.ReadFile(filepath.Join(dir, "key.pem"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tls.X509KeyPair(chain, key); err != nil {
+		t.Fatalf("the files do not form a pair: %v", err)
+	}
+}
+
+func TestCertsReissuesAMissingOrForeignKeyAtOnce(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		spoil func(t *testing.T, dir string)
+	}{
+		{"missing", func(t *testing.T, dir string) {
+			if err := os.Remove(filepath.Join(dir, "key.pem")); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"foreign", func(t *testing.T, dir string) {
+			_, other := pemPair(t, time.Now().Add(-time.Hour), time.Now().AddDate(0, 0, 90),
+				wildcard)
+			if err := os.WriteFile(filepath.Join(dir, "key.pem"), other, 0o640); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"not a key", func(t *testing.T, dir string) {
+			if err := os.WriteFile(filepath.Join(dir, "key.pem"), []byte("x"), 0o640); err != nil {
+				t.Fatal(err)
+			}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			iss, l := newFake(t), &logs{}
+			eq(t, Run(t.Context(), config(dir), iss, l.logger(), time.Now()), true)
+			first := leafIn(t, dir)
+			tc.spoil(t, dir)
+			// Not due by the chain alone, so only the key sends it back to the CA
+			eq(t, Run(t.Context(), config(dir), iss, l.logger(), time.Now()), true)
+			eq(t, len(iss.obtained), 2)
+			eq(t, iss.replaced[1].SerialNumber, first.SerialNumber)
+			pairIn(t, dir)
+			warns := l.records(t, "WARN")
+			eq(t, len(warns), 1)
+			eq[any](t, warns[0]["names"], wildcard)
+			eq(t, len(l.errors(t)), 0)
+		})
+	}
+}
+
+func TestCertsKeyWithoutChainIsIssued(t *testing.T) {
+	dir := t.TempDir()
+	_, key := pemPair(t, time.Now().Add(-time.Hour), time.Now().AddDate(0, 0, 90), wildcard)
+	if err := os.WriteFile(filepath.Join(dir, "key.pem"), key, 0o640); err != nil {
+		t.Fatal(err)
+	}
+	iss, l := newFake(t), &logs{}
+	eq(t, Run(t.Context(), config(dir), iss, l.logger(), time.Now()), true)
+	eq(t, len(iss.obtained), 1)
+	eq(t, iss.replaced[0] == nil, true)
+	pairIn(t, dir)
+}
+
+func TestCertsForeignKeyThatCannotBeReissuedFailsTheRun(t *testing.T) {
+	dir := t.TempDir()
+	iss, l := newFake(t), &logs{}
+	eq(t, Run(t.Context(), config(dir), iss, l.logger(), time.Now()), true)
+	if err := os.Remove(filepath.Join(dir, "key.pem")); err != nil {
+		t.Fatal(err)
+	}
+	iss.fail = errors.New("acme: the order failed")
+	eq(t, Run(t.Context(), config(dir), iss, l.logger(), time.Now()), false)
+	var msgs []any
+	for _, e := range l.errors(t) {
+		msgs = append(msgs, e["msg"])
+		eq[any](t, e["names"], wildcard)
+	}
+	eq(t, msgs, []any{"certificate renewal failed", "certificate key missing or not its pair"})
+	// With no ACME client the run still names the key, never only the renewal
+	l = &logs{}
+	eq(t, Run(t.Context(), config(dir), nil, l.logger(), time.Now()), false)
+	eq(t, len(l.errors(t)), 2)
 }
 
 func TestCertsOwnPairUnderAlertDays(t *testing.T) {

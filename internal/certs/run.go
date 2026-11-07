@@ -41,8 +41,11 @@ func Run(ctx context.Context, cfg Config, iss Issuer, log *slog.Logger, now time
 	}
 	for _, c := range cfg.Certificates {
 		names := strings.Join(c.Names, ",")
-		leaf, err := readLeaf(c.Dir)
+		leaf, err := readPair(c.Dir)
 		switch {
+		case errors.Is(err, errKey):
+			log.Error("certificate key missing or not its pair", "names", names)
+			ok = false
 		case err != nil:
 			log.Error("certificate unreadable", "names", names, "err", err)
 			ok = false
@@ -63,23 +66,29 @@ func Run(ctx context.Context, cfg Config, iss Issuer, log *slog.Logger, now time
 	return ok
 }
 
-// renew obtains c again when it is missing or due, and writes it into its directory
+// renew obtains c again when it is missing, due or without its key, and writes it into its dir
 func renew(c Certificate, iss Issuer, log *slog.Logger, now time.Time) bool {
 	names := strings.Join(c.Names, ",")
-	leaf, err := readLeaf(c.Dir)
-	if err != nil {
+	leaf, err := readPair(c.Dir)
+	keyless := errors.Is(err, errKey)
+	switch {
+	case keyless:
+		// The chain still names what the new pair replaces, so ARI can exempt it from limits
+		log.Warn("key.pem is missing or is not the chain's key, obtaining a new pair",
+			"names", names)
+	case err != nil:
 		log.Warn("the current certificate is unreadable, obtaining a new one", "names", names,
 			"err", err)
 	}
 	var win *Window
-	if leaf != nil && iss != nil {
+	if leaf != nil && !keyless && iss != nil {
 		if win, err = iss.Window(leaf); err != nil {
 			log.Warn("no renewal window from the CA, renewing at two thirds", "names", names,
 				"err", err)
 			win = nil
 		}
 	}
-	if !Due(leaf, win, now) {
+	if !keyless && !Due(leaf, win, now) {
 		log.Info("certificate not due", "names", names, "not_after", leaf.NotAfter)
 		return true
 	}

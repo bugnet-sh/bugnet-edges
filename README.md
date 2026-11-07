@@ -143,9 +143,11 @@ Each run:
 
 1. checks that every variable in `dns_env` is set, naming a missing one and never a value;
 2. renews each certificate in `[[certificates]]` that is missing or due, by DNS-01 through the
-   lego provider `dns_provider`. A certificate is due once the CA's ARI window starts, or at two
-   thirds of its life when the CA gives no window. A failed window lookup logs a warning naming
-   the certificate and falls back to two thirds. A renewal names the certificate it replaces
+   lego provider `dns_provider`. It judges `fullchain.pem` and `key.pem` together, so a pair whose
+   `key.pem` is missing or is not the chain's key is renewed at once, with a warning naming the
+   certificate. A certificate is due once the CA's ARI window starts, or at two thirds of its life
+   when the CA gives no window. A failed window lookup logs a warning naming the certificate and
+   falls back to two thirds. A renewal names the certificate it replaces
    (ARI). When the CA refuses the new order for that field, as malformed, unauthorized or in
    conflict, it orders once more without it. A failed validation is never retried in the same
    run, so one bad run spends one validation;
@@ -156,9 +158,10 @@ Each run:
    chain and key that do not match are never written;
 4. reads `edge_cert_days_left` and `edge_cert_issued` from each address in `cert_metrics`.
 
-It exits 1, with an error log naming the certificate, when a renewal fails, a certificate has
-fewer than `alert_days` (14) days left, a name was never issued, or a metrics address does not
-answer after 3 tries. So `systemctl --failed` shows it. Otherwise it exits 0.
+It exits 1, with an error log naming the certificate, when a renewal fails, a pair still lacks
+its key, a certificate has fewer than `alert_days` (14) days left, a name was never issued, or a
+metrics address does not answer after 3 tries. So `systemctl --failed` shows it. Otherwise it
+exits 0.
 
 The ACME account key and registration live under `state_dir`, one directory per ACME directory
 URL, so runs never register a new account and staging never mixes with production. Switching

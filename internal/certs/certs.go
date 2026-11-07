@@ -233,20 +233,38 @@ func temp(dir, name string, body []byte, gid int) (string, error) {
 	return path, nil
 }
 
-// readLeaf is the first certificate of dir's fullchain.pem, nil when there is none
-func readLeaf(dir string) (*x509.Certificate, error) {
-	b, err := os.ReadFile(filepath.Join(dir, "fullchain.pem"))
+// errKey is a key.pem that is missing, or that is not the key of fullchain.pem's leaf
+var errKey = errors.New("key.pem is missing or is not the chain's key")
+
+// readPair is the leaf of dir's fullchain.pem, nil when there is none, and errKey beside the leaf
+// when key.pem does not complete the pair
+func readPair(dir string) (*x509.Certificate, error) {
+	chain, err := os.ReadFile(filepath.Join(dir, "fullchain.pem"))
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	p, _ := pem.Decode(b)
+	p, _ := pem.Decode(chain)
 	if p == nil || p.Type != "CERTIFICATE" {
 		return nil, errors.New("fullchain.pem holds no certificate")
 	}
-	return x509.ParseCertificate(p.Bytes)
+	leaf, err := x509.ParseCertificate(p.Bytes)
+	if err != nil {
+		return nil, err
+	}
+	key, err := os.ReadFile(filepath.Join(dir, "key.pem"))
+	if errors.Is(err, os.ErrNotExist) {
+		return leaf, errKey
+	}
+	if err != nil {
+		return nil, err
+	}
+	if _, err := tls.X509KeyPair(chain, key); err != nil {
+		return leaf, errKey
+	}
+	return leaf, nil
 }
 
 func daysLeft(notAfter, now time.Time) int {
