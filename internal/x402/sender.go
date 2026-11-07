@@ -154,8 +154,8 @@ func (e *Events) sendRows(ctx, budget context.Context, o outgoing, last bool) {
 	})
 	var keep []*eventRow
 	for rows := o.rows; len(rows) > 0; {
-		if budget.Err() != nil && !last {
-			// Rows the round had no time left to start wait for the next round with no try counted
+		if !last && !e.mayStart(budget) {
+			// Rows the round has no time left to start wait for the next round with no try counted
 			e.requeue(o.placement, append(keep, rows...))
 			return
 		}
@@ -173,6 +173,12 @@ func (e *Events) sendRows(ctx, budget context.Context, o outgoing, last bool) {
 		}
 	}
 	e.requeue(o.placement, keep)
+}
+
+// mayStart says the round's budget has a quarter of the flush interval left, so a send may start
+func (e *Events) mayStart(budget context.Context) bool {
+	deadline, _ := budget.Deadline()
+	return budget.Err() == nil && time.Until(deadline) >= e.flush/4
 }
 
 // sendBatch sends one batch and logs each row the router answered for

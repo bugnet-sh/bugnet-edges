@@ -304,8 +304,10 @@ Folding:
 Sending:
 
 - A batch holds at most 50 rows of one placement, money rows first.
-- A flush sends to at most 8 placements at once, and all its sends share one interval. Rows
-  it had no time to start wait for the next flush with no try counted.
+- A flush sends to at most 8 placements at once, and all its sends share one interval. Every
+  flush but the last starts a batch only while a quarter of the interval is left, so each send
+  gets at least that long. Rows a flush had no time to start wait for the next flush with no try
+  counted.
 - A failed send keeps every `ref`, so the router stores a row once.
 - A row that cannot involve money is sent again 3 times, then dropped. A money row is sent
   again for 5 minutes from its first failure, then dropped.

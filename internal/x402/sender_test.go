@@ -483,6 +483,45 @@ func TestRoundEndsWithinOneInterval(t *testing.T) {
 	eq(t, len(logs.records(t, msgEventSent))+drops, placements)
 }
 
+func TestNoSendStartsInARoundsLastQuarter(t *testing.T) {
+	s := &sink{batches: make(chan *routerv1.AppendX402EventsRequest, 64)}
+	// Each send answers 50 ms before the round's budget of 400 ms ends
+	s.answerWith(func(ctx context.Context, _ int) (*routerv1.AppendX402EventsResponse, error) {
+		deadline, _ := ctx.Deadline()
+		select {
+		case <-time.After(time.Until(deadline) - 50*time.Millisecond):
+			return &routerv1.AppendX402EventsResponse{}, nil
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	})
+	logs := &logBuf{}
+	e := NewEvents(s.send, 400*time.Millisecond, time.Now,
+		slog.New(slog.NewJSONHandler(logs, nil)))
+	const placements = sendWorkers + 1
+	for i := range placements {
+		e.Add(fmt.Sprintf("pl_%d", i), eventCall(EventFree, "", time.Now()))
+	}
+	e.flushAll(context.Background())
+	eq(t, len(s.drain()), sendWorkers)
+	eq(t, len(logs.records(t, msgEventSent)), sendWorkers)
+
+	s.answerWith(nil)
+	e.flushAll(context.Background())
+	eq(t, len(s.drain()), 1)
+	eq(t, len(logs.records(t, msgEventSent)), placements)
+	eq(t, len(logs.records(t, msgEventDropped)), 0)
+
+	for _, c := range []struct {
+		left time.Duration
+		want bool
+	}{{150 * time.Millisecond, true}, {75 * time.Millisecond, false}, {0, false}} {
+		budget, cancel := context.WithTimeout(context.Background(), c.left)
+		eq(t, e.mayStart(budget), c.want)
+		cancel()
+	}
+}
+
 func TestEventLogsHoldNoSecrets(t *testing.T) {
 	e, s, clk, logs := newTestEvents(t)
 	const placement = "pl_secretplacement01"
