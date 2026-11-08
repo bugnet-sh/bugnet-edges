@@ -28,6 +28,8 @@ type Settings struct {
 	ReportInterval      time.Duration
 	ReportBytes         int64
 	TotalBytesPerSecond int64
+	// CheckEvery spaces the lease checks, zero keeps DP 4.2's minute
+	CheckEvery time.Duration
 }
 
 // Parts are the router calls of one service and the budget kind the process enforces
@@ -36,6 +38,8 @@ type Parts struct {
 	Open  events.Open
 	Send  usage.Send
 	Kind  routerv1.BudgetKind
+	// Tap sees each event before the lease table does, nil for none
+	Tap func(*routerv1.EdgeEvent)
 }
 
 // Traffic is one process's leases, usage reporter, pacer and event watcher, made once and shared
@@ -57,18 +61,41 @@ func Edge(c routerv1connect.EdgeServiceClient, s Settings, log *slog.Logger) *Tr
 	}, s, log)
 }
 
+// Egress wires the pieces to EgressService, enforcing the egress budget
+func Egress(
+	c routerv1connect.EgressServiceClient, s Settings, tap func(*routerv1.EdgeEvent),
+	log *slog.Logger,
+) *Traffic {
+	return New(Parts{
+		Check: lease.EgressCheck(c),
+		Open:  events.EgressEvents(c),
+		Send:  usage.EgressSend(c, s.ReporterID),
+		Kind:  routerv1.BudgetKind_BUDGET_KIND_EGRESS,
+		Tap:   tap,
+	}, s, log)
+}
+
 // New wires leases to events, usage answers to leases and pace, and lease states to usage
 func New(p Parts, s Settings, log *slog.Logger) *Traffic {
 	if log == nil {
 		log = slog.Default()
 	}
+	every := checkEvery
+	if s.CheckEvery > 0 {
+		every = s.CheckEvery
+	}
 	t := &Traffic{
-		Leases: lease.NewTable(loggedCheck(p.Check, log), checkEvery, checkWhileDown),
+		Leases: lease.NewTable(loggedCheck(p.Check, log), every, min(checkWhileDown, every)),
 		Usage:  usage.NewReporter(loggedSend(p.Send, log), s.ReportInterval, s.ReportBytes),
 		Pacer:  pace.New(s.TotalBytesPerSecond),
 	}
 	t.watcher = events.NewWatcher(loggedOpen(p.Open, log),
-		func(ev *routerv1.EdgeEvent) { t.Leases.Apply(ev, p.Kind) },
+		func(ev *routerv1.EdgeEvent) {
+			if p.Tap != nil {
+				p.Tap(ev)
+			}
+			t.Leases.Apply(ev, p.Kind)
+		},
 		t.Leases.CheckNow,
 		func(down bool) {
 			if down {
