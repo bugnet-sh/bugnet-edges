@@ -160,6 +160,9 @@ func TestContinue(t *testing.T) {
 	eq(t, ck, cookieName+"="+x.pv.token+"; Path=/; HttpOnly; Secure; SameSite=Lax")
 	eq(t, strings.Contains(strings.ToLower(ck), "domain"), false)
 	eq(t, x.postContinue(t, "https://"+host, "").Header.Get("Location"), "/")
+	res = x.postContinue(t, "null", "/b", "Sec-Fetch-Site", "same-origin")
+	eq(t, res.StatusCode, http.StatusSeeOther)
+	eq(t, res.Header.Get("Location"), "/b")
 	// The cookie then works for the page's own requests
 	res2, body := x.browse(t, "/app?page=2")
 	eq(t, res2.StatusCode, http.StatusOK)
@@ -179,6 +182,11 @@ func TestContinueRefusesCrossOriginAndBadNext(t *testing.T) {
 	eq(t, x.postContinue(t, "", "/").StatusCode, 403)
 	eq(t, x.postContinue(t, "https://"+host, "/", "Sec-Fetch-Site", "same-site").StatusCode,
 		403)
+	// The interstitial's no-referrer makes a browser send Origin null, so same-origin vouches
+	eq(t, x.postContinue(t, "null", "/").StatusCode, 403)
+	eq(t, x.postContinue(t, "null", "/", "Sec-Fetch-Site", "same-site").StatusCode, 403)
+	eq(t, x.postContinue(t, "null", "/", "Sec-Fetch-Site", "cross-site").StatusCode, 403)
+	eq(t, x.postContinue(t, "null", "/", "Sec-Fetch-Site", "none").StatusCode, 403)
 	for _, next := range []string{`/\evil.example`, "//evil.example", "/a\r\nb",
 		"https://evil.example/", "evil", "/a\x00b", "/%0a\x7f"} {
 		eq(t, x.postContinue(t, "https://"+host, next).StatusCode, 400)

@@ -21,11 +21,7 @@ func (h *handler) warn(w http.ResponseWriter, r *http.Request, rt *route, tok st
 
 // cont is POST /__bugnet/continue, which sets the cookie and sends the browser to next
 func (h *handler) cont(w http.ResponseWriter, r *http.Request, id, host string) {
-	if r.Header.Get("Origin") != "https://"+host {
-		pages.Write(w, pages.Forbidden)
-		return
-	}
-	if s := r.Header.Get("Sec-Fetch-Site"); s != "" && s != "same-origin" {
+	if !sameOrigin(r, host) {
 		pages.Write(w, pages.Forbidden)
 		return
 	}
@@ -50,6 +46,19 @@ func (h *handler) cont(w http.ResponseWriter, r *http.Request, id, host string) 
 	hd.Set("Cache-Control", "no-store")
 	hd.Set("Referrer-Policy", "no-referrer")
 	w.WriteHeader(http.StatusSeeOther)
+}
+
+// sameOrigin is true for a Continue post from this host's own interstitial
+func sameOrigin(r *http.Request, host string) bool {
+	site := r.Header.Get("Sec-Fetch-Site")
+	switch r.Header.Get("Origin") {
+	case "https://" + host:
+		return site == "" || site == "same-origin"
+	case "null":
+		// The interstitial's no-referrer policy makes a browser send Origin null for its form
+		return site == "same-origin"
+	}
+	return false
 }
 
 // cleanNext rebuilds next as a path and query on this host, refusing what could leave it
