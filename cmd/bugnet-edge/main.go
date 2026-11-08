@@ -15,6 +15,7 @@ import (
 	"github.com/bugnet-sh/bugnet-proto/gen/go/bugnet/router/v1/routerv1connect"
 
 	"github.com/bugnet-sh/bugnet-edges/internal/edge"
+	"github.com/bugnet-sh/bugnet-edges/internal/edge/preview"
 	"github.com/bugnet-sh/bugnet-edges/internal/edge/transfer"
 	"github.com/bugnet-sh/bugnet-edges/internal/metrics"
 	"github.com/bugnet-sh/bugnet-edges/internal/pages"
@@ -104,6 +105,43 @@ func runSessions(ctx context.Context, cfg edge.SessionsConfig, log *slog.Logger)
 		Run(ctx)
 }
 
+// edgeRoutes builds the edge's handlers, each route with its own rule for failed tokens
+func edgeRoutes(
+	cfg edge.Config, router routerv1connect.EdgeServiceClient,
+	newCall func() routerv1connect.EdgeServiceClient, tr *traffic.Traffic, log *slog.Logger,
+) edge.Deps {
+	p, t := cfg.Previews, cfg.Transfers
+	guard := func(perMinute int) *strangers.Guard {
+		return strangers.NewGuard(perMinute, strangers.Mark, strangers.Unknown)
+	}
+	return edge.Deps{
+		Preview: preview.New(router, preview.Deps{
+			Traffic:       tr,
+			Guard:         guard(p.TokenFailuresPerMinute),
+			CacheSize:     p.ResolveCache,
+			RouteTTL:      time.Duration(p.RouteTTL),
+			QueueWait:     time.Duration(p.QueueWait),
+			QueueMax:      p.QueueMax,
+			AbuseContact:  p.AbuseContact,
+			BoatPerMinute: p.BoatRequestsPerMinute,
+			BoatSuffix:    p.BoatHostSuffix,
+			Log:           log,
+		}),
+		Transfer: transfer.New(router, newCall, transfer.Deps{
+			EdgeID:      cfg.EdgeID,
+			Traffic:     tr,
+			Guard:       guard(t.TokenFailuresPerMinute),
+			Conns:       strangers.NewConns(t.MaxConnectionsPerIP),
+			Chunk:       int(t.Chunk),
+			IdleTimeout: time.Duration(t.IdleTimeout),
+			Log:         log,
+		}),
+		Landing: pages.Landing(p.AbuseContact),
+		Log:     log,
+		Metrics: metrics.New(),
+	}
+}
+
 // runEdge serves the edge role with one set of traffic pieces, kept running through the drain
 func runEdge(ctx context.Context, cfg edge.Config, log *slog.Logger) error {
 	router := routerv1connect.NewEdgeServiceClient(
@@ -119,31 +157,16 @@ func runEdge(ctx context.Context, cfg edge.Config, log *slog.Logger) error {
 		ReportBytes:         int64(cfg.Usage.ReportBytes),
 		TotalBytesPerSecond: int64(cfg.TotalBytesPerSecond),
 	}, log)
-	t := cfg.Transfers
-	guard := strangers.NewGuard(t.TokenFailuresPerMinute, strangers.Mark, strangers.Unknown)
-	xfer := transfer.New(router, newCall, transfer.Deps{
-		EdgeID:      cfg.EdgeID,
-		Traffic:     tr,
-		Guard:       guard,
-		Conns:       strangers.NewConns(t.MaxConnectionsPerIP),
-		Chunk:       int(t.Chunk),
-		IdleTimeout: time.Duration(t.IdleTimeout),
-		Log:         log,
-	})
+	routes := edgeRoutes(cfg, router, newCall, tr, log)
 
-	// Transfers still draining keep counting, so the traffic pieces stop only after the server
+	// Requests still draining keep counting, so the traffic pieces stop only after the server
 	tctx, stopTraffic := context.WithCancel(context.WithoutCancel(ctx))
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
 		tr.Run(tctx)
 	}()
-	err := edge.New(cfg, edge.Deps{
-		Transfer: xfer,
-		Landing:  pages.Landing(cfg.Previews.AbuseContact),
-		Log:      log,
-		Metrics:  metrics.New(),
-	}).Run(ctx)
+	err := edge.New(cfg, routes).Run(ctx)
 	stopTraffic()
 	<-done
 	return err

@@ -17,6 +17,7 @@ a test seller for local and mainnet test runs, never deployed with them.
 | `cmd/x402-fake-seller` | The fake x402 seller over TLS, settling to a chain or a facilitator |
 | `internal/edge` | Every role's settings, listeners, host routing, HSTS and drain |
 | `internal/sessionsroute` | The session page, its record and delete calls, and its live view |
+| `internal/edge/preview` | The preview route, proxied to the sandbox's gate with its interstitial |
 | `internal/edge/transfer` | The transfer route, uploads and downloads relayed through the router |
 | `internal/pages` | The edge's own HTML pages and the transfer route's JSON errors |
 | `internal/certs` | `bugnet-certs`' settings, renewal, writing by rename and the expiry alert |
@@ -103,8 +104,8 @@ The edge routes by the `Host` header. Anything else gets the 404 page.
 | `<transfer_host>` | `/<token>` and `/<token>/<name>` | Transfers |
 | `<hooks_host>` | `POST /hooks/<provider>/<secret>` | Hooks. `<provider>` is 1 to 16 of `a-z0-9` |
 
-- A route without a handler yet serves the 404 page. Transfers are served. Later tasks plug in
-  previews and hooks through `edge.Deps`.
+- A route without a handler yet serves the 404 page. Previews, the landing page and transfers
+  are served. A later task plugs hooks in through `edge.Deps`.
 - A request whose `Host` belongs to another route than its TLS name gets 421, so the browser
   opens its own connection. That keeps transfers on HTTP/1.1 and within their per-address
   connection limit. Previews may share a connection, since one wildcard covers them all.
@@ -115,10 +116,15 @@ The edge routes by the `Host` header. Anything else gets the 404 page.
 - Every TLS answer carries `Strict-Transport-Security: max-age=31536000`. Any other value a
   handler or an upstream sets is replaced.
 - Server settings: `ReadHeaderTimeout` 10 s (the TLS handshake too), `IdleTimeout` 2 min, no read or
-  write timeout, `MaxHeaderBytes` 64 KiB on the edge, `max_header_bytes` on the secrets route and
+  write timeout, `MaxHeaderBytes` 1 MiB on the edge, `max_header_bytes` on the secrets route and
   twice `max_header_bytes` on the sessions route (which answers past it itself), HTTP/2
   `max_concurrent_streams` (128). Extended CONNECT stays off, so WebSockets always arrive over
   HTTP/1.1.
+- Ruling E1: the preview names take headers up to 1 MiB, since a preview can fill the shared
+  `bugnet.sh` cookie jar and no origin may fail on it. `transfer` and `hooks` keep 64 KiB, since
+  only programs call them. Past that they answer 431 and close the connection, as JSON
+  (`headers_too_large`) on `transfer` and as a page on `hooks`. The redirect listener keeps
+  64 KiB.
 - `internal/pages` writes DP 8.6's pages. They are small static HTML with `Cache-Control:
   no-store`, `Referrer-Policy: no-referrer`, `X-Content-Type-Options: nosniff` and a CSP of
   `default-src 'none'`. They never name a provider. Transfer errors are JSON,
@@ -199,6 +205,123 @@ Downloads:
 Bytes count after TLS, toward the sandbox for uploads and from it for downloads, paced by the
 placement's lane. Logs name a transfer only by the first 8 hex characters of its token's SHA-256,
 never the token or the path.
+
+### Previews
+
+`internal/edge/preview` serves `https://<id>.<preview_domain>/` (DP 8.2). Each request is
+proxied to the gate in its sandbox, through the provider route `ResolvePreview` answers.
+
+The token comes from the query (`bugnet_token`, only values starting `bnp_`), then the
+`Bugnet-Token` header, then the `__Host-bnp` cookie. Before the router is asked:
+
+| Check | Answer |
+| --- | --- |
+| A path under `/__bugnet/` other than `POST /__bugnet/continue` | 404 page |
+| No token, or only a cookie the cross-preview rule refuses | 401 page |
+| Not `bnp_` and 43 base64url characters, or failed in the last 10 s | 401 page, counted |
+| An id the router did not know in the last 10 s | 404 page, counted |
+| The address is marked, the route not cached, and it asked within 1 s | 429, `Retry-After: 1` |
+
+- A failed token counts against the address. Past `token_failures_per_minute` (20) the address
+  is marked for 10 minutes, and its failed tokens get 429 with `Retry-After: 600`. The preview
+  route has its own `strangers.Guard`, so failures there never mark an address on the transfer
+  route. A token that resolves always works.
+- **The cross-preview rule** (DP 8.2.3) applies when the cookie is the only token. It passes
+  `Sec-Fetch-Site: same-origin` or `none`, and a top-level GET navigation. An upgrade also needs
+  `Origin: https://<this host>`. Without `Sec-Fetch-*`, a non-GET request or an upgrade needs no
+  `Origin` or this one. Anything else counts as no token.
+- **The resolve cache** keys on the preview id and the token's SHA-256, holds `resolve_cache`
+  (10,000) routes and asks again after `route_ttl` (60 s). Requests waiting on one key share one
+  `ResolvePreview`, run apart from them with 2 s. While the router cannot answer, a cached route
+  keeps serving and is asked about again every 5 s. A refusal drops it. A route ends early when
+  its preview is revoked or its placement's lease ends, so the next request resolves again.
+
+The router's refusals map to pages:
+
+| Router answer | Page |
+| --- | --- |
+| `PREVIEW_UNKNOWN` | 404, counted |
+| `TOKEN_INVALID` | 401, counted |
+| `NOT_READY` | 410, the sandbox ended |
+| `PREVIEW_REVOKED` | 410, the preview was turned off |
+| `BUDGET_SPENT` | 429, the traffic limit |
+| `GATE_UNAVAILABLE` | 502, and a repair |
+| Anything else | 503, `Retry-After: 2`, with a warn log line |
+
+**The interstitial** (DP 8.2.4) stops a browser page load that carries the token in the query:
+`Sec-Fetch-Dest` of `document`, `iframe`, `frame`, `embed` or `object`, or, without any
+`Sec-Fetch-*`, a GET whose `Accept` names `text/html`.
+
+- It shows DP 8.2.4's warning word for word, when the sandbox started and ends (UTC), the
+  placement's source label as data and cut to 120 characters, and a "Report abuse" link to
+  `abuse_contact`.
+- `Bugnet-Skip-Warning`, the header form, curl and an off `interstitial` skip it. So does a
+  browser whose `__Host-bnp` already holds this token, so it shows once per browser and
+  preview.
+- A browser page load with the query token that skips it gets the cookie on the answer, so the
+  page's own requests carry it.
+- **Continue** posts `token` and `next` to `/__bugnet/continue`. It needs `Origin:
+  https://<this host>` and `Sec-Fetch-Site` of `same-origin` or none, else 403. A `next` that is
+  not a path on this host, starts `//`, or holds `\` or a control character gets 400. The token
+  must resolve. Then it answers 303 to `next`, rebuilt from its parsed path and query without
+  the token, and sets `__Host-bnp=<token>; Path=/; HttpOnly; Secure; SameSite=Lax`.
+
+**Requests** (DP 8.2.5) go to the route's origin with the provider's `Host`. The edge removes
+each `bugnet_token=bnp_...` pair from the raw query by hand and keeps the rest byte for byte. It
+deletes every client `Bugnet-*` header and `__Host-bnp` and the route's own cookie names from
+`Cookie`, then adds the route's headers and cookies, `Bugnet-Port`, `Bugnet-Host` and
+`Bugnet-Client-Ip`. `Authorization`, `Origin`, `Sec-WebSocket-*` and the app's cookies pass.
+The route's blocked prefixes (Koyeb's `/koyeb-sandbox/`) and the bare prefix without its slash
+get the 404 page, checked in lower case on the raw and decoded path, with repeated slashes and
+dot segments collapsed.
+
+**Answers** (DP 8.2.6):
+
+| Answer | The visitor sees |
+| --- | --- |
+| No `Bugnet-Gate-Response` | The 502 page, and a repair |
+| `Bugnet-Gate-Error: port_closed` | 502 "Nothing is listening on port N", never a repair |
+| `Bugnet-Gate-Error: busy` | 503 busy |
+| A refused connection to the route | The 502 page, and a repair |
+| Any other route failure | The 502 page |
+
+- `Cache-Control` and `Server` come back from `Bugnet-Cache-Control` and `Bugnet-Server`, and go
+  when those are `-`. `Alt-Svc`, `NEL`, `Report-To`, `Reporting-Endpoints`, HSTS, `Via`,
+  `Cf-*`, `X-Koyeb-*` and `Bugnet-*` go.
+- A `Set-Cookie` named `__Host-bnp...` (any case) or after a route cookie never reaches the
+  visitor. Every other one loses its `Domain`.
+- A `Location` on the provider's host, `localhost`, `127.0.0.1`, `[::1]` or `0.0.0.0`, any port,
+  points at `https://<preview host>` with its path, query and fragment kept.
+- The edge's pages carry `no-store`, so a "nothing on port N" page is never cached and the same
+  link works once the app listens.
+- A repair is one `RepairPreview` per preview a minute, run apart from the request with 30 s.
+  It drops the preview's cached routes, so the next request resolves again.
+
+**Limits** per placement (DP 8.2.8), from the resolve's budget:
+
+| Limit | Over it |
+| --- | --- |
+| `queued_requests` (64) in flight | Wait up to `queue_wait` (30 s), then 503, `Retry-After: 2` |
+| `queue_max` (256) waiting | 503 at once |
+| `requests_per_second` (100), burst `requests_burst` (200) | Wait as for a slot |
+| `websockets` (32) open | 429, `Retry-After: 10` |
+| `boat_requests_per_minute` (5,000), edge-wide on Boat routes | Wait as for a slot |
+
+- A WebSocket takes a request token but no request slot, since it stays open as long as its page.
+- A route is Boat's when its host is `boat_host_suffix` (`on.boat.dev`) or ends in it. The Boat
+  limiter allows a tenth of a minute's figure at once, so no minute passes 1.1 times it. 0 turns
+  it off.
+- Bytes count after TLS both ways, bodies and WebSocket frames alike, the `101` header aside.
+  They are paced by the placement's lane under the process's total cap.
+
+**Leases.** Each request runs under its own `Lease.Preview` child, which every lease check
+reports as held. A revocation, by event or by a check that names the preview, cuts that
+preview's requests and WebSockets within the second, and leaves the placement's other previews
+alone. The placement's end, its deadline and a spent budget cut every one, and the next request
+gets the page for the reason. An extension moves the deadline of open WebSockets.
+
+**Upstream.** One `http.Transport` with HTTP/2 where the route offers it, no compression, no
+proxy, 10 s to dial and 5 minutes for an answer's headers. Upgrades go over HTTP/1.1.
 
 ### The sessions route
 
@@ -595,8 +718,8 @@ A `strangers.PerIP` allows a number of requests a minute per address, for the se
 routes. A limit of 0 turns it off.
 
 A `strangers.Conns` caps the connections each address holds open at once, 16 on the transfer
-route, where every answer closes its connection. `Acquire` takes a slot and hands back its release, which is safe to call twice. An address
-with nothing open is forgotten at once.
+route, where every answer closes its connection. `Acquire` takes a slot and hands back its
+release, which is safe to call twice. An address with nothing open is forgotten at once.
 
 Both forget an address once its count is back to full and its mark has run out. Each holds at most
 200,000 addresses, and the guard at most 100,000 failed tokens. A full table sweeps at most once a
@@ -692,6 +815,8 @@ build theirs with `traffic.New` and their own calls and budget kind.
   new lease for the placement exists by then.
 - Failed checks, reports and stream opens are logged at warn level. The libraries never log.
 - `Run` stops once its context ends, after one last usage report.
+- `bugnet-edge` makes one `Traffic` and shares it between the preview and transfer routes, each
+  with its own `strangers.Guard`.
 
 ## Settings
 
