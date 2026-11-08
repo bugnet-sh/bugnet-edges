@@ -18,6 +18,7 @@ import (
 
 	"connectrpc.com/connect"
 	routerv1 "github.com/bugnet-sh/bugnet-proto/gen/go/bugnet/router/v1"
+	"golang.org/x/time/rate"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/bugnet-sh/bugnet-edges/internal/strangers"
@@ -739,6 +740,29 @@ func TestLimits(t *testing.T) {
 			t.Fatalf("512 KiB at 256 KiB/s took %s", took)
 		}
 	})
+}
+
+func TestNewRouteRefreshesThePlacementLimits(t *testing.T) {
+	x := newHarness(t)
+	res, _ := x.get(t, at("/"), headerName, x.pv.token)
+	eq(t, res.StatusCode, http.StatusOK)
+	g := x.handler().limits.gateFor(t)
+	eq(t, cap(g.slots), 64)
+	x.router.set(func(f *fakeRouter) {
+		f.budget.QueuedRequests, f.budget.Websockets = 2, 1
+		f.budget.RequestsPerSecond, f.budget.RequestsBurst = 5, 3
+	})
+	x.gate.listen(3000)
+	other := x.router.add(secondID, 3000)
+	res, _ = x.get(t, "https://"+secondID+"."+domain+"/", headerName, other.token)
+	eq(t, res.StatusCode, http.StatusOK)
+	eq(t, x.handler().limits.gateFor(t), g)
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	eq(t, cap(g.slots), 2)
+	eq(t, g.wsMax, 1)
+	eq(t, g.rate.Limit(), rate.Limit(5))
+	eq(t, g.rate.Burst(), 3)
 }
 
 // handler is the preview handler behind the harness's server

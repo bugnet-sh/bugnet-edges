@@ -6,6 +6,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	routerv1 "github.com/bugnet-sh/bugnet-proto/gen/go/bugnet/router/v1"
 	"golang.org/x/time/rate"
 
 	"github.com/bugnet-sh/bugnet-edges/internal/lease"
@@ -28,12 +29,34 @@ type limits struct {
 
 // gate is one placement's request slots, waiting count, request rate and WebSockets
 type gate struct {
-	slots   chan struct{} // nil for no limit
 	waiting atomic.Int64
-	rate    *rate.Limiter
 
 	mu        sync.Mutex
+	fig       figures
+	rate      *rate.Limiter
+	slots     chan struct{} // nil for no limit
 	ws, wsMax int
+}
+
+// figures are the budget's limits a gate enforces
+type figures struct {
+	queued, websockets, burst int
+	perSecond                 float64
+}
+
+func figuresOf(b *routerv1.EdgeBudget) figures {
+	return figures{
+		queued: int(b.GetQueuedRequests()), websockets: int(b.GetWebsockets()),
+		burst: int(max(b.GetRequestsBurst(), 1)), perSecond: float64(b.GetRequestsPerSecond()),
+	}
+}
+
+// limiter paces requests at the figures' rate, or not at all for a rate of 0
+func (f figures) limiter() *rate.Limiter {
+	if f.perSecond > 0 {
+		return rate.NewLimiter(rate.Limit(f.perSecond), f.burst)
+	}
+	return rate.NewLimiter(rate.Inf, 0)
 }
 
 // newLimits waits wait for a slot with most waiting, and paces Boat routes at perMinute
@@ -50,20 +73,18 @@ func boatLimiter(perMinute int) *rate.Limiter {
 	return rate.NewLimiter(rate.Limit(float64(perMinute)/60), max(perMinute/10, 1))
 }
 
+// gate is the placement's gate, taking the figures of the newest route built for its lease
 func (l *limits) gate(rt *route) *gate {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	f := figuresOf(rt.budget)
 	if g, ok := l.gates[rt.lease]; ok {
+		g.refresh(f)
 		return g
 	}
-	b := rt.budget
-	g := &gate{rate: rate.NewLimiter(rate.Inf, 0), wsMax: int(b.GetWebsockets())}
-	if b.GetQueuedRequests() > 0 {
-		g.slots = make(chan struct{}, b.GetQueuedRequests())
-	}
-	if b.GetRequestsPerSecond() > 0 {
-		g.rate = rate.NewLimiter(rate.Limit(b.GetRequestsPerSecond()),
-			int(max(b.GetRequestsBurst(), 1)))
+	g := &gate{fig: f, wsMax: f.websockets, rate: f.limiter()}
+	if f.queued > 0 {
+		g.slots = make(chan struct{}, f.queued)
 	}
 	l.gates[rt.lease] = g
 	context.AfterFunc(rt.lease.Context(), func() {
@@ -72,6 +93,32 @@ func (l *limits) gate(rt *route) *gate {
 		delete(l.gates, rt.lease)
 	})
 	return g
+}
+
+// refresh takes new figures, while requests already admitted give back what they took
+func (g *gate) refresh(f figures) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if f == g.fig {
+		return
+	}
+	if f.queued != g.fig.queued {
+		g.slots = nil
+		if f.queued > 0 {
+			g.slots = make(chan struct{}, f.queued)
+		}
+	}
+	if f.perSecond != g.fig.perSecond || f.burst != g.fig.burst {
+		g.rate = f.limiter()
+	}
+	g.wsMax, g.fig = f.websockets, f
+}
+
+// now is the gate's current request rate and slots
+func (g *gate) now() (*rate.Limiter, chan struct{}) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.rate, g.slots
 }
 
 // admit waits for the request's turn and returns its release, or the page that refuses it
@@ -104,17 +151,18 @@ func (l *limits) admit(ctx context.Context, rt *route, upgrade bool) (func(), pa
 		}
 		return nil, pages.Busy, false
 	}
-	if g.rate.Wait(wctx) != nil {
+	pace, slots := g.now()
+	if pace.Wait(wctx) != nil {
 		return refuse()
 	}
 	if rt.boat && l.boat != nil && l.boat.Wait(wctx) != nil {
 		return refuse()
 	}
 	// A WebSocket holds no request slot, since it stays open for as long as the page does
-	if !upgrade && g.slots != nil {
+	if !upgrade && slots != nil {
 		select {
-		case g.slots <- struct{}{}:
-			undo = append(undo, func() { <-g.slots })
+		case slots <- struct{}{}:
+			undo = append(undo, func() { <-slots })
 		case <-wctx.Done():
 			return refuse()
 		}
