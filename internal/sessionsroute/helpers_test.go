@@ -82,7 +82,7 @@ type record struct {
 	deleted bool
 }
 
-// script is one job's live stream: its frames, then an end of the call or a hold
+// script is one job's live stream, its frames and then an end of the call or a hold
 type script struct {
 	frames []*routerv1.WatchSessionJobResponse
 	// hold keeps the call open after the frames until the edge ends it

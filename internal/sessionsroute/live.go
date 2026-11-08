@@ -254,8 +254,7 @@ func (s *sseWriter) last() {
 
 /* Stream caps */
 
-// streams holds the open live streams by client address and process, and by record once the
-// router took their key, so a wrong key never meets a record's cap (SP 7.4)
+// streams holds the live streams by address and process, and by record once the key is taken
 type streams struct {
 	perRecord, perIP, all int
 

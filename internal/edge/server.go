@@ -31,8 +31,7 @@ const (
 	edgeHeaderBytes   = 64 << 10
 	secretsDrain      = time.Minute
 	secretsStreams    = 128
-	// sessionsDrain lets a record call finish; live streams end at the stop signal, and the
-	// page resumes them from its cursor
+	// sessionsDrain lets a record call finish, live streams ending at the stop signal
 	sessionsDrain   = time.Minute
 	sessionsStreams = 128
 	hstsValue       = "max-age=31536000"
@@ -150,9 +149,7 @@ func NewSecrets(cfg SecretsConfig, d SecretsDeps) *Server {
 	return s
 }
 
-// NewSessions is the sessions role, serving only its own host with no redirect listener. Its
-// server reads headers up to twice max_header_bytes, so the route itself can answer the ones
-// past max_header_bytes with its 431 page
+// NewSessions is the sessions role, reading twice max_header_bytes so the route sends its 431
 func NewSessions(cfg SessionsConfig, d SessionsDeps) *Server {
 	s := newServer("sessions", d.Log, d.Metrics)
 	s.tlsAddr, s.metricsAddr = cfg.TLSListenAddr, cfg.MetricsListenAddr

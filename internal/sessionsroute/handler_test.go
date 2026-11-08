@@ -410,8 +410,7 @@ func TestWrongKeysPerID(t *testing.T) {
 	eq(t, ask(60, newKey()).StatusCode, 404)
 	eq(t, ask(61, key).StatusCode, 200)
 
-	// A second later one offender's call goes through, and the right key the router took is
-	// never blocked even from an offender
+	// A second later one offender gets through, and a right key the router took always does
 	time.Sleep(1100 * time.Millisecond)
 	eq(t, ask(8, newKey()).StatusCode, 404)
 	eq(t, ask(9, newKey()).StatusCode, 429)

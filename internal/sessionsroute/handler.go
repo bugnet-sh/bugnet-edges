@@ -51,7 +51,7 @@ var (
 
 // Options are the route's page, origin and limits. A limit of 0 or less is no limit
 type Options struct {
-	Origin         string  // the page's own origin, https://<host>
+	Origin         string  // the page's own origin, https and the host
 	Bundle         *Bundle // the page, from LoadBundle
 	MaxHeaderBytes int     // headers past this get the 431 page, 1 MiB when 0
 
@@ -301,8 +301,7 @@ func (h *Handler) v1(w http.ResponseWriter, r *http.Request, path string) {
 	}
 }
 
-// pageCall is SP 4's rule: the page's own origin and same-origin only, a same-site preview
-// counting as cross-site. Cookie is never read
+// pageCall is SP 4's rule, the page's own origin with same-origin, and Cookie is never read
 func (h *Handler) pageCall(r *http.Request) bool {
 	t, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
 	origin := r.Header.Values("Origin")
@@ -331,7 +330,7 @@ func v1Path(path string) (id string, seq uint64, ok bool) {
 	return "", 0, false
 }
 
-// pageBody is what the page sends, {"k": key} and on a live call "cursor"
+// pageBody is what the page sends, its key and on a live call the cursor
 type pageBody struct {
 	K      string `json:"k"`
 	Cursor string `json:"cursor"`
@@ -403,7 +402,7 @@ func (h *Handler) refused(q *call, err error, remember bool) {
 	}
 }
 
-// record is POST /v1/s/<id>: the 200 body is built around the router's bytes, never parsed
+// record is POST /v1/s/<id>, its 200 body built around the router's bytes and never parsed
 func (h *Handler) record(q *call, body []byte) {
 	b, ok := h.admit(q, body)
 	if !ok {
@@ -486,8 +485,7 @@ func (h *Handler) answer(q *call, status int, retry time.Duration) {
 	h.send(q.w, q.r, status, nil)
 }
 
-// done logs the call by route and status and the first 8 hex characters of the id's SHA-256,
-// never the body, the key or the link. Strangers' calls log at debug level only
+// done logs route, status and 8 hex of the id's SHA-256, never the body, key or link
 func (h *Handler) done(q *call) {
 	level := slog.LevelDebug
 	switch {

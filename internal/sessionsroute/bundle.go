@@ -99,8 +99,7 @@ var required = map[string]string{
 	"X-Content-Type-Options": "nosniff",
 }
 
-// parseHeaders reads one "Name: value" a line, refusing a bundle without the CSP and the
-// required headers, or one that sets a cookie or a content header
+// parseHeaders reads one header a line and refuses a bundle that leaves out or sets the wrong ones
 func parseHeaders(text string) ([][2]string, error) {
 	var out [][2]string
 	seen := map[string]string{}

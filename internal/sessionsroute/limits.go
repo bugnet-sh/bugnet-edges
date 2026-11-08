@@ -23,7 +23,7 @@ const (
 	fullSweepEvery = time.Second
 )
 
-// clientKey is the address the per-IP limits count by: an IPv4 address, or an IPv6 one's /64
+// clientKey is the address the per-IP limits count by, IPv4 or an IPv6 /64
 func clientKey(r *http.Request) netip.Addr {
 	ap, err := netip.ParseAddrPort(r.RemoteAddr)
 	if err != nil {
@@ -109,8 +109,7 @@ func (g *idGuard) failed(id string, ip netip.Addr) {
 	e.tokens--
 }
 
-// mayAsk reports whether a call for id from ip may go to the router, an address that sent the
-// hot id a wrong key sharing one call a second and every other address never held
+// mayAsk holds only the addresses that sent the hot id a wrong key, to one call a second
 func (g *idGuard) mayAsk(id string, ip netip.Addr) bool {
 	if g.ids == nil {
 		return true
@@ -164,8 +163,7 @@ func (g *idGuard) sweepDue(now time.Time) {
 	}
 }
 
-// sweep drops every id whose bucket is full again and which is no longer hot, and every
-// offender whose wrong key is older than idHot
+// sweep drops the ids full again and no longer hot, and the offenders past idHot
 func (g *idGuard) sweep(now time.Time) {
 	g.swept = now
 	for k, e := range g.ids {
@@ -187,8 +185,7 @@ func (g *idGuard) size() (ids, offenders int) {
 	return len(g.ids), len(g.offenders)
 }
 
-// goodPairs holds the SHA-256 of each (id, key) the router accepted, so a right key is never
-// blocked by the limits strangers share with it
+// goodPairs holds each (id, key) the router took, so a right key is never blocked
 type goodPairs struct {
 	mu        sync.Mutex
 	until     map[[32]byte]time.Time
