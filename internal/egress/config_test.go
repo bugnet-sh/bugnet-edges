@@ -109,3 +109,16 @@ func TestLoadSecretsReadsCredentials(t *testing.T) {
 }
 
 func timeNow() time.Time { return time.Now() }
+
+func TestHostRateFloorAboveRateRefused(t *testing.T) {
+	body := `egress_host = "egress.example.com"` + "\ncustom_host_requests_per_minute = 600\n" +
+		"[x402]\nhost_rate_floor_per_placement = "
+	_, err := Load(write(t, body+"601\n"), env(goodEnv))
+	if err == nil || !strings.Contains(err.Error(), "host_rate_floor_per_placement") ||
+		!strings.Contains(err.Error(), "custom_host_requests_per_minute") {
+		t.Fatalf("a floor above the rate loaded or named the wrong keys: %v", err)
+	}
+	if _, err := Load(write(t, body+"600\n"), env(goodEnv)); err != nil {
+		t.Fatal(err)
+	}
+}

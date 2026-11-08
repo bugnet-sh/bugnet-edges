@@ -170,6 +170,8 @@ type fakeRouter struct {
 	usageBytes uint64
 	down       error
 	events     chan *routerv1.EdgeEvent
+	x402Events []*routerv1.X402Event
+	unpaid     map[string]*routerv1.X402Unpaid
 }
 
 func newFakeRouter() *fakeRouter {
@@ -286,6 +288,16 @@ func (r *fakeRouter) ReportEgressUsage(
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	left := map[string]uint64{}
+	for host, u := range flattenUnpaid(req.Msg.GetX402Unpaid()) {
+		if r.unpaid == nil {
+			r.unpaid = map[string]*routerv1.X402Unpaid{}
+		}
+		if r.unpaid[host] == nil {
+			r.unpaid[host] = &routerv1.X402Unpaid{}
+		}
+		r.unpaid[host].Requests += u.Requests
+		r.unpaid[host].Bytes += u.Bytes
+	}
 	for _, u := range req.Msg.GetUsage() {
 		r.usageBytes += u.GetBytesIn() + u.GetBytesOut()
 		if p := r.byID[u.GetPlacementId()]; p != nil {
@@ -293,6 +305,26 @@ func (r *fakeRouter) ReportEgressUsage(
 		}
 	}
 	return connect.NewResponse(&routerv1.ReportEgressUsageResponse{BytesRemaining: left}), nil
+}
+
+// flattenUnpaid keys the deltas by host alone, a test using one placement
+func flattenUnpaid(d map[string]*routerv1.X402UnpaidByHost) map[string]*routerv1.X402Unpaid {
+	out := map[string]*routerv1.X402Unpaid{}
+	for _, byHost := range d {
+		for h, u := range byHost.GetHosts() {
+			out[h] = u
+		}
+	}
+	return out
+}
+
+func (r *fakeRouter) AppendX402Events(
+	_ context.Context, req *connect.Request[routerv1.AppendX402EventsRequest],
+) (*connect.Response[routerv1.AppendX402EventsResponse], error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.x402Events = append(r.x402Events, req.Msg.GetEvents()...)
+	return connect.NewResponse(&routerv1.AppendX402EventsResponse{}), nil
 }
 
 func (r *fakeRouter) WatchEgressEvents(
@@ -391,6 +423,8 @@ type harness struct {
 	// release unblocks the upstream's /block, which counts its waiting requests in inflight
 	release  chan struct{}
 	inflight atomic.Int32
+	// sell replaces the upstream's answers when set
+	sell http.HandlerFunc
 }
 
 // logBuffer collects the proxy's log lines, so a test can check that no secret reached them
@@ -454,7 +488,7 @@ func start(t *testing.T, opts ...option) *harness {
 		ForceAttemptHTTP2: true,
 	}
 	deps := Deps{
-		Router: client, Keys: NewKeys(h.key), Minter: minter, Transport: up,
+		Router: client, Keys: NewKeys(h.key), Minter: minter, Transport: up, SellerTransport: up,
 		Log: slog.New(slog.NewTextHandler(h.log,
 			&slog.HandlerOptions{Level: slog.LevelDebug})),
 		CheckEvery: time.Minute,
@@ -503,6 +537,10 @@ func routerHandler(r *fakeRouter) http.Handler {
 
 // upstreamHandler echoes what the upstream saw, and honours the paths the tests use
 func (h *harness) upstreamHandler(w http.ResponseWriter, r *http.Request) {
+	if h.sell != nil {
+		h.sell(w, r)
+		return
+	}
 	switch r.URL.Path {
 	case "/redirect":
 		http.Redirect(w, r, "https://other.example/next", http.StatusFound)

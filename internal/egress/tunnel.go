@@ -294,6 +294,9 @@ func (s *Server) innerCert(p *placement) func(*tls.ClientHelloInfo) (*tls.Certif
 			if s.refusedSNI != nil {
 				s.refusedSNI(p.id, name)
 			}
+			if s.events != nil {
+				s.events.RefusedHost(p.id, name, s.now())
+			}
 			return nil, err
 		}
 		return s.minter.Leaf(p.view().ca, name)
