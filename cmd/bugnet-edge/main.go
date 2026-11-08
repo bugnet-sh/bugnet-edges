@@ -15,6 +15,7 @@ import (
 	"github.com/bugnet-sh/bugnet-proto/gen/go/bugnet/router/v1/routerv1connect"
 
 	"github.com/bugnet-sh/bugnet-edges/internal/edge"
+	"github.com/bugnet-sh/bugnet-edges/internal/edge/hooks"
 	"github.com/bugnet-sh/bugnet-edges/internal/edge/preview"
 	"github.com/bugnet-sh/bugnet-edges/internal/edge/transfer"
 	"github.com/bugnet-sh/bugnet-edges/internal/metrics"
@@ -153,6 +154,12 @@ func edgeRoutes(
 			Chunk:       int(t.Chunk),
 			IdleTimeout: time.Duration(t.IdleTimeout),
 			Log:         log,
+		}),
+		Hooks: hooks.New(router, hooks.Options{
+			PathSecret:        cfg.HookPathSecret,
+			MaxBody:           int64(cfg.Hooks.MaxBody),
+			RequestsPerMinute: cfg.Hooks.RequestsPerMinute,
+			Log:               log,
 		}),
 		Landing: pages.Landing(p.AbuseContact),
 		Log:     log,

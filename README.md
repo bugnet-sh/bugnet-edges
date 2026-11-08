@@ -107,8 +107,12 @@ The edge routes by the `Host` header. Anything else gets the 404 page.
 | `<transfer_host>` | `/<token>` and `/<token>/<name>` | Transfers |
 | `<hooks_host>` | `POST /hooks/<provider>/<secret>` | Hooks. `<provider>` is 1 to 16 of `a-z0-9` |
 
-- A route without a handler yet serves the 404 page. Previews, the landing page and transfers
-  are served. A later task plugs hooks in through `edge.Deps`.
+- A route without a handler serves the 404 page. Previews, the landing page, transfers and
+  hooks are served.
+- The hooks route compares the path secret (`BUGNET_HOOK_PATH_SECRET`) in constant time and
+  answers 404 on a mismatch before any router call. It limits each address to
+  `hooks.requests_per_minute`, answers 413 past `hooks.max_body`, and hands the exact body and
+  every header to `DeliverHook`. The router's answer maps to 204, 404, 401 or 503.
 - A request whose `Host` belongs to another route than its TLS name gets 421, so the browser
   opens its own connection. That keeps transfers on HTTP/1.1 and within their per-address
   connection limit. Previews may share a connection, since one wildcard covers them all.
