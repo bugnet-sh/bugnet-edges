@@ -36,6 +36,8 @@ a test seller for local and mainnet test runs, never deployed with them.
 | `internal/events` | The router's event stream, resumed from its cursor |
 | `internal/lease` | One context per placement that ends at its deadline, end or spent budget |
 | `internal/traffic` | One process's leases, events, usage and pace, wired together |
+| `cmd/bugnet-egress` | The secret proxy, and `ca init` and `box-key new` |
+| `internal/egress` | The tunnel, the inner TLS, the placeholder swap, the dialer and the CA |
 | `internal/x402` | `[x402]` settings, refusals, headers, paths, 402s, bodies, cache, caps, events |
 | `internal/x402/x402test` | A test CA in the `mtls init --dev` layout and a fake Payments signer |
 | `internal/fakeseller` | The fake x402 seller of XS 11.2 and its settlers |
@@ -394,6 +396,104 @@ state of each name:
 | --- | --- |
 | `edge_cert_days_left{name}` | Whole days to expiry, for the wildcard and each issued name |
 | `edge_cert_issued{name}` | 1 once the name has a certificate, 0 once its request at start failed |
+
+## bugnet-egress
+
+`bugnet-egress serve -config FILE` is the secret proxy of DP 10. A sandbox's forwarder opens a
+WebSocket tunnel to `egress_host`, runs TLS inside it for a secret host, and the proxy swaps
+placeholders for the sealed values in `Authorization` and the named headers.
+
+| Command | Does |
+| --- | --- |
+| `serve -config FILE` | Runs the proxy on `example/egress.toml` |
+| `ca init --out DIR` | Writes `egress-ca.key` (0600) and `egress-ca.pem`, a P-256 CA for 2 years |
+| `box-key new --id ID --out DIR` | Writes `egress_box_<ID>` (0600), prints id and public key once |
+
+`serve` needs `BUGNET_EGRESS_TOKEN` (32 characters or more) and, to let the router's fetcher in,
+`BUGNET_EGRESS_FETCH_TOKEN`. The CA key and the box keys are files under `$CREDENTIALS_DIRECTORY`,
+named by `ca_credential` and `box_keys`. A box key file holds the base64 private key.
+
+### Outer listener
+
+`listen_addr` takes TLS for `egress_host` only, behind HAProxy, PROXY v2 first, HTTP/1.1 only. Any
+other SNI, an empty one or an IP literal fails the handshake. `GET /v1/tunnel` with a WebSocket
+upgrade and the `bugnet-tunnel.v1` subprotocol is the one path. Everything else gets 404.
+
+| Token | Source | Answer |
+| --- | --- | --- |
+| `bnt_` that resolves | any | 101 |
+| `bnt_` unknown, ended or not ready | any | 401, counted against the source |
+| Past `token_failures_per_minute` from one source | any | 429 `Retry-After: 600` |
+| A marked source that asked the router within 1 s | any | 429 `Retry-After: 1` |
+| Egress budget spent, or `max_tunnels_per_placement` open | any | 429 |
+| Router unreachable and the token not cached | any | 503 |
+| `bnf_` and `Bugnet-Placement` | `fetch_sources` only | 101, with fetch-only secrets |
+| `bnf_` | any other | 401, as an unknown token |
+
+A token that resolves is cached for `resolve_cache` (30 s), and an unknown one for 10 s. Tunnels
+already open keep running while the router is down.
+
+### Inner TLS and requests
+
+Each tunnel runs `tls.Server` with a certificate minted for the SNI, HTTP/2 or HTTP/1.1.
+
+- The SNI must be a host of the placement's secrets. An empty name, an IP, `egress_host` and
+  `refused_hosts` with every name under them fail the handshake.
+- A leaf is ECDSA P-256 under one process-wide key, with a 128-bit serial and one SAN, valid from
+  1 hour ago for 7 days and minted again under a day left. Ten thousand stay cached.
+- `Host` must equal the SNI, else 421. `TRACE` and `TRACK` get 405. `Bugnet-*` request headers are
+  dropped and no `X-Forwarded-*` is added.
+- The swap scans `Authorization` (Bearer, `token`, any token68 scheme, and Basic decoded and
+  encoded again) and the header names the host's secrets list, never the URL, cookies or body.
+  A placeholder swaps only when the sealed payload's binding, name, hosts, headers and
+  `fetchOnly` equal the router's record, the host is one of the secret's hosts, and the value has
+  no CR, LF or NUL.
+- A preset host is forwarded with or without a swap. A custom host is forwarded only after a
+  swap, else 403, and past `custom_host_requests_per_minute` all placements together, 429.
+- Upstream: `https://<host>` on 443, full verification against public roots, HTTP/2 when offered,
+  redirects passed back, WebSocket upgrades passed.
+- Response header values equal to a swapped value, or to a Basic credential the proxy built, are
+  replaced by the placeholder.
+
+### The dialer
+
+`Dialer` resolves through `resolvers` only, never the local files. Its `Control` hook refuses
+loopback, `0.0.0.0/8`, private, link-local, CGNAT, unique-local, NAT64, 6to4, Teredo, multicast
+and reserved ranges, their IPv4-mapped forms, and every address of the host. The x402 transport
+uses the same dialer, and it has no allow list.
+
+### Freshness and limits
+
+- `SecretsChanged` makes the proxy resolve the placement again. A placeholder it does not hold
+  does the same, at most once every 2 s. Every 60 s `CheckEgressLeases` answers each placement's
+  secrets version, and a version that moved drops the cached set at once.
+- `PlacementEnded`, a passed deadline and a spent egress budget close every tunnel of the
+  placement and zero its values.
+- A tunnel idle for `tunnel_idle_timeout` closes. `max_streams_per_tunnel` bounds HTTP/2 streams,
+  and the router's `requests_in_flight` (32) bounds a placement's requests in flight, the next
+  ones waiting. The pace each way per placement comes from the router, and
+  `total_bytes_per_second` caps the process.
+- Tunnel bytes both ways count toward the egress budget.
+
+### Logs and metrics
+
+A request logs the first 8 hex characters of the SHA-256 of the placement id, the host, method,
+status, bytes, whether a swap happened and the secret's name. Never a header value, a URL or a
+body.
+
+| Metric | Meaning |
+| --- | --- |
+| `egress_tunnels` | Tunnels open now |
+| `egress_tunnel_refused_total{status}` | Upgrades refused |
+| `egress_inner_handshakes_refused_total` | Inner handshakes refused for their name |
+| `egress_tunnel_bytes_total{direction}` | Tunnel bytes, `in` toward the sandbox |
+| `egress_requests_total{kind,status,swapped}` | Requests inside tunnels |
+| `egress_custom_host_requests{host}`, `..._bytes{host}` | The 1,000 busiest custom hosts |
+| `edge_cert_days_left{name}` | Days left of `egress_host`'s certificate, read by `bugnet-certs` |
+
+`acme_enabled`, `acme_directory` and `static_dir` work as in the other roles, with ACME off for
+unit tests and the live stack's local mode. `old_cas` keeps an earlier CA after a rotation, for
+the sandboxes that started under it. The process sets `RLIMIT_CORE` to 0.
 
 ## bugnet-certs
 
