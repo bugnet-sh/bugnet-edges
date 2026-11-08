@@ -266,7 +266,8 @@ The router's refusals map to pages:
   makes browsers send `Origin: null` for its form, and a cross-site page that sends `null` too
   has `Sec-Fetch-Site: cross-site`. A `next` that is not a path on this host, starts `//`, or
   holds `\` or a control character gets 400. The token must resolve. Then it answers 303 to
-  `next`, rebuilt from its parsed path and query without the token, and sets `__Host-bnp=<token>; Path=/; HttpOnly; Secure; SameSite=Lax`.
+  `next`, rebuilt from its parsed path and query without the token, and sets
+  `__Host-bnp=<token>; Path=/; HttpOnly; Secure; SameSite=Lax`.
 
 **Requests** (DP 8.2.5) go to the route's origin with the provider's `Host`. The edge removes
 each `bugnet_token=bnp_...` pair from the raw query by hand and keeps the rest byte for byte. It
