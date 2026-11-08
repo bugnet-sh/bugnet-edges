@@ -1,0 +1,19 @@
+# bugnet-ssh's settings, /etc/bugnet/ssh.toml (DP 9.8)
+# Its one secret comes only from the environment, BUGNET_SSH_TOKEN
+
+router_url = "http://127.0.0.1:8080"
+gateway_id = ""                       # host-pid when empty
+listen_addr = "127.0.0.1:2223"        # behind HAProxy's port 2222, PROXY v2 first
+metrics_listen_addr = "127.0.0.1:9102"  # /healthz, /readyz and /metrics
+proxy_protocol_from = ["127.0.0.1/32", "::1/128"]
+host_key_credentials = ["ssh_host_ed25519_key"]  # names under $CREDENTIALS_DIRECTORY
+handshake_timeout = "20s"
+max_sessions_per_connection = 10      # the router may lower it per grant
+max_forwards_per_connection = 32
+keepalive_interval = "30s"            # on both legs, three misses close
+drain_max = "2h"                      # an old process keeps sessions this long on deploy, at most 2h
+accepts_per_minute_per_ip = 60        # 0 is no limit
+auth_failures_per_minute_per_ip = 20  # then the address is refused for 10 minutes, 0 is no limit
+usage_report_interval = "5s"
+total_bytes_per_second = "16MiB"      # every placement together, both ways, 0 is no cap
+banner_fallback = false               # true answers a refused lease in the first session instead
