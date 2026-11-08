@@ -65,6 +65,8 @@ type Deps struct {
 	Counters *x402.Counters
 	// HostRate holds the host buckets, new buckets from the settings when nil
 	HostRate *x402.HostRate
+	// Signer asks Payments to sign, a payable 402 is refused as payments_unavailable when nil
+	Signer *x402.Signer
 }
 
 // Server is the egress proxy, the outer listener and the tunnels it carries
@@ -88,6 +90,10 @@ type Server struct {
 	counters     *x402.Counters
 	hostRate     *x402.HostRate
 	seller       http.RoundTripper
+	signer       *x402.Signer
+	buffers      *x402.Buffers
+	open         *openCount
+	netRefused   *metrics.Counter
 
 	group   singleflight.Group
 	cacheMu sync.Mutex
@@ -159,6 +165,11 @@ func New(cfg Config, d Deps) *Server {
 		s.hostRate = x402.NewHostRate(cfg.CustomHostRequestsPerMinute,
 			cfg.X402.HostRateFloorPerPlacement, d.Now)
 	}
+	s.signer, s.open = d.Signer, newOpenCount()
+	s.buffers = x402.NewBuffers(int64(cfg.X402.BufferBudget), int64(cfg.X402.BufferPerPlacement))
+	s.buffers.Export(d.Metrics)
+	s.netRefused = d.Metrics.Counter("egress_x402_network_unsupported_total",
+		"x402 402s with no exact USDC on Solana, by namespace offered", "namespace")
 	s.seller = d.SellerTransport
 	if s.seller == nil {
 		s.seller = s.newSellerTransport()

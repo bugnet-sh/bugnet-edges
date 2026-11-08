@@ -43,6 +43,7 @@ type sellerReq struct {
 	svc   x402.Service
 
 	targetOK bool
+	hold     hold
 	reached  atomic.Bool
 	answered bool
 	cut      atomic.Bool
@@ -129,13 +130,22 @@ func (q *sellerReq) refuse(code x402.Code, f x402.Facts, seller http.Header) {
 // forward is XS 6.6 steps 8 to 10 for a request that passed the checks
 func (q *sellerReq) forward(t x402.Target, pay x402.Pay) {
 	r := q.r
+	if pay == x402.Payable && q.s.signer != nil {
+		if !q.takeHold() {
+			return
+		}
+		defer q.hold.release()
+	}
 	hdr := r.Header.Clone()
 	x402.StripHopByHop(hdr, true)
 	x402.StripBugnet(hdr)
 	if _, ok := hdr["User-Agent"]; !ok {
 		hdr.Set("User-Agent", "")
 	}
-	trace := &httptrace.ClientTrace{WroteHeaders: func() { q.reached.Store(true) }}
+	trace := &httptrace.ClientTrace{
+		WroteHeaders: func() { q.reached.Store(true) },
+		WroteRequest: func(httptrace.WroteRequestInfo) { q.hold.startFirstAnswer() },
+	}
 	out := (&http.Request{
 		Method: r.Method, Host: q.host, Header: hdr, ContentLength: r.ContentLength,
 		URL: &url.URL{
@@ -144,10 +154,12 @@ func (q *sellerReq) forward(t x402.Target, pay x402.Pay) {
 		},
 	}).WithContext(httptrace.WithClientTrace(r.Context(), trace))
 	if r.Body != nil && r.Body != http.NoBody {
-		out.Body = &capBody{q: q, rc: r.Body}
+		out.Body = &capBody{q: q, rc: q.hold.body(r.Body)}
 	}
 	resp, err := q.s.seller.RoundTrip(out)
+	slow := q.hold.settle()
 	if err != nil {
+		q.hold.release()
 		if q.cut.Load() {
 			q.ev.StreamCut = true
 			q.refuse(x402.CodeUnpaidCap, x402.Facts{}, nil)
@@ -163,9 +175,18 @@ func (q *sellerReq) forward(t x402.Target, pay x402.Pay) {
 	x402.StripHopByHop(resp.Header, false)
 	x402.StripBugnet(resp.Header)
 	if resp.StatusCode == http.StatusPaymentRequired && pay != x402.SelfPaid {
-		q.unpayable(resp, pay)
+		mark := q.hold.mark
+		if slow {
+			mark = x402.CodeFirstAnswerSlow
+		}
+		if q.hold.rp != nil && mark == "" {
+			q.payable(resp, t)
+		} else {
+			q.unpayable(resp, pay, mark)
+		}
 		return
 	}
+	q.hold.release()
 	q.stream(resp, pay == x402.SelfPaid)
 }
 
@@ -215,19 +236,30 @@ func isBugnet(k string) bool {
 }
 
 // unpayable is XS 6.9's 402 steps 1 to 4 on a request Bugnet may not pay, or not yet
-func (q *sellerReq) unpayable(resp *http.Response, pay x402.Pay) {
+func (q *sellerReq) unpayable(resp *http.Response, pay x402.Pay, mark x402.Code) {
+	_, code, keep := q.judge(resp, pay, mark)
+	if code == "" {
+		code = x402.CodePaymentsUnavailable
+	}
+	q.refuse(code, q.facts(), keep)
+}
+
+// judge reads a seller's 402 up to the call to Payments, code empty when the request may be paid
+func (q *sellerReq) judge(
+	resp *http.Response, pay x402.Pay, mark x402.Code,
+) (req x402.Required, code x402.Code, keep http.Header) {
 	s := q.s.cfg.X402
 	values := resp.Header.Values("Payment-Required")
-	var code x402.Code
 	switch {
 	case pay == x402.MethodNotEnabled:
 		code = x402.CodeMethodNotEnabled
 	case pay == x402.PathNotPaid:
 		code = x402.CodePathNotPaid
+	case mark != "":
+		code = mark
 	case !q.cfg.Enabled:
 		code = x402.CodeX402Disabled
 	}
-	var req x402.Required
 	if code == "" && len(values) == 0 {
 		code = q.readV1(resp)
 	} else if code == "" {
@@ -240,15 +272,20 @@ func (q *sellerReq) unpayable(resp *http.Response, pay x402.Pay) {
 		q.ev.AskedMicros, q.ev.Asset, q.ev.Network = e.AmountMicros, e.Asset, e.Network
 		q.ev.Scheme, q.ev.PayTo, q.ev.X402Version = e.Scheme, e.PayTo, uint32(req.Version)
 	}
-	if code == "" {
-		// Payments is called from Task X31 on, so a payable request cannot be paid yet
-		code = x402.CodePaymentsUnavailable
+	if code == x402.CodeNetworkUnsupported {
+		seen := map[string]bool{}
+		for _, e := range req.Accepts {
+			if ns := x402.Namespace(e.Network); !seen[ns] {
+				seen[ns] = true
+				q.s.netRefused.Inc(ns)
+			}
+		}
 	}
-	keep := http.Header{}
+	keep = http.Header{}
 	if len(values) == 1 && int64(len(values[0])) <= int64(s.PaymentRequiredMax) {
 		keep["Payment-Required"] = values
 	}
-	q.refuse(code, q.facts(), keep)
+	return req, code, keep
 }
 
 // readV1 reads at most 64 KiB of a 402 body that has no header, counting it as unpaid bytes

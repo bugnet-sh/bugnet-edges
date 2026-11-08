@@ -89,14 +89,33 @@ func serve(
 	events := x402.NewEvents(x402.EventsSend(router), time.Duration(cfg.X402.EventFlushInterval),
 		time.Now, log)
 	counters := x402.NewCounters()
+	credDir, _ := getenv("CREDENTIALS_DIRECTORY")
+	signer, err := x402.NewSigner(cfg.X402, credDir, log, time.Now)
+	if err != nil {
+		// Without a signer every payable 402 is refused as payments_unavailable
+		log.Warn("x402 payments are off, the signer did not load", "err", err)
+		signer = nil
+	}
 	srv := egress.New(cfg, egress.Deps{
 		Router: router, Keys: keys, Minter: minter, Log: log, Events: events, Counters: counters,
+		Signer: signer,
 		HostRate: x402.NewHostRate(cfg.CustomHostRequestsPerMinute,
 			cfg.X402.HostRateFloorPerPlacement, time.Now),
 	})
 	events.SetServices(srv.HasX402)
 	var side sync.WaitGroup
 	side.Add(2)
+	if signer != nil {
+		side.Add(1)
+		go func() {
+			defer side.Done()
+			signer.Run(ctx)
+		}()
+		reload := make(chan os.Signal, 1)
+		signal.Notify(reload, syscall.SIGHUP)
+		defer signal.Stop(reload)
+		go reloadOnHUP(ctx, log, signer, reload)
+	}
 	go func() {
 		defer side.Done()
 		events.Run(ctx)
@@ -109,6 +128,20 @@ func serve(
 	err = srv.Run(ctx)
 	side.Wait()
 	return err
+}
+
+// reloadOnHUP re-reads the client certificate and the CA at each SIGHUP until ctx ends
+func reloadOnHUP(ctx context.Context, log *slog.Logger, s *x402.Signer, hup <-chan os.Signal) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-hup:
+			if err := s.Reload(); err != nil {
+				log.Error("x402 client certificate reload failed", "err", err)
+			}
+		}
+	}
 }
 
 // caInit writes egress-ca.key and egress-ca.pem into the directory
