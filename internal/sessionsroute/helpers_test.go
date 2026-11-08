@@ -102,6 +102,8 @@ type fakeRouter struct {
 	open    int
 	// err, when set, answers every call
 	err error
+	// delay holds every call this long before it answers
+	delay time.Duration
 }
 
 func newFakeRouter() *fakeRouter {
@@ -130,8 +132,11 @@ func (f *fakeRouter) find(id, key string) (*record, error) {
 }
 
 func (f *fakeRouter) GetSessionRecord(
-	_ context.Context, req *connect.Request[routerv1.GetSessionRecordRequest],
+	ctx context.Context, req *connect.Request[routerv1.GetSessionRecordRequest],
 ) (*connect.Response[routerv1.GetSessionRecordResponse], error) {
+	if err := f.wait(ctx); err != nil {
+		return nil, err
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.gets++
@@ -143,8 +148,11 @@ func (f *fakeRouter) GetSessionRecord(
 }
 
 func (f *fakeRouter) DeleteSessionRecord(
-	_ context.Context, req *connect.Request[routerv1.DeleteSessionRecordRequest],
+	ctx context.Context, req *connect.Request[routerv1.DeleteSessionRecordRequest],
 ) (*connect.Response[routerv1.DeleteSessionRecordResponse], error) {
+	if err := f.wait(ctx); err != nil {
+		return nil, err
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.deletes++
@@ -160,6 +168,9 @@ func (f *fakeRouter) WatchSessionJob(
 	ctx context.Context, req *connect.Request[routerv1.WatchSessionJobRequest],
 	stream *connect.ServerStream[routerv1.WatchSessionJobResponse],
 ) error {
+	if err := f.wait(ctx); err != nil {
+		return err
+	}
 	f.mu.Lock()
 	f.watches = append(f.watches, req.Msg)
 	_, err := f.find(req.Msg.GetId(), req.Msg.GetKey())
@@ -188,6 +199,19 @@ func (f *fakeRouter) WatchSessionJob(
 		<-ctx.Done()
 	}
 	return nil
+}
+
+// wait holds a call for the fake's delay, or until the edge ends it
+func (f *fakeRouter) wait(ctx context.Context) error {
+	f.mu.Lock()
+	d := f.delay
+	f.mu.Unlock()
+	select {
+	case <-time.After(d):
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func (f *fakeRouter) counts() (gets, deletes, watches int) {

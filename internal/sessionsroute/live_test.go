@@ -3,6 +3,7 @@ package sessionsroute
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"io"
 	"net"
@@ -204,22 +205,46 @@ func TestLiveCapPerProcess(t *testing.T) {
 	s := newStreams(8, 4, 256)
 	var open []*liveStream
 	for i := range 256 {
-		ls, refusal := s.add(fmt.Sprintf("id%d", i), netip.AddrFrom4([4]byte{10, 0, byte(i), 1}))
+		ls, refusal := s.add(netip.AddrFrom4([4]byte{10, 0, byte(i), 1}))
 		eq(t, refusal, 0)
+		eq(t, s.join(ls, fmt.Sprintf("id%d", i)), true)
 		open = append(open, ls)
 	}
-	_, refusal := s.add("another", netip.MustParseAddr("10.1.0.1"))
+	_, refusal := s.add(netip.MustParseAddr("10.1.0.1"))
 	eq(t, refusal, http.StatusTooManyRequests)
 	s.remove(open[0])
 	s.remove(open[0])
 	eq(t, s.count(), 255)
-	_, refusal = s.add("another", netip.MustParseAddr("10.1.0.1"))
+	pending, refusal := s.add(netip.MustParseAddr("10.1.0.1"))
 	eq(t, refusal, 0)
 
+	// A stream not yet joined to its record still ends on shutdown
 	s.closeAll()
 	eq(t, <-open[1].stop, "")
-	_, refusal = s.add("late", netip.MustParseAddr("10.1.0.2"))
+	eq(t, <-pending.stop, "")
+	_, refusal = s.add(netip.MustParseAddr("10.1.0.2"))
 	eq(t, refusal, http.StatusServiceUnavailable)
+}
+
+func TestRecordCapCountsOnlyJoinedStreams(t *testing.T) {
+	s := newStreams(2, 0, 0)
+	var joined []*liveStream
+	for i := range 2 {
+		ls, _ := s.add(netip.AddrFrom4([4]byte{10, 0, 0, byte(i)}))
+		eq(t, s.join(ls, "r"), true)
+		joined = append(joined, ls)
+	}
+	pending, refusal := s.add(netip.MustParseAddr("10.0.1.1"))
+	eq(t, refusal, 0)
+	eq(t, s.join(pending, "r"), false)
+	eq(t, s.join(pending, "other"), true)
+	eq(t, s.join(pending, "other"), true)
+	s.remove(joined[0])
+	late, _ := s.add(netip.MustParseAddr("10.0.1.2"))
+	eq(t, s.join(late, "r"), true)
+	s.endRecord("r")
+	eq(t, <-late.stop, reasonClosed)
+	eq(t, len(pending.stop), 0)
 }
 
 func TestDeleteEndsLiveStreams(t *testing.T) {
@@ -281,4 +306,52 @@ func TestStalledReaderFreesItsSlot(t *testing.T) {
 	// The client reads nothing, so a write meets its deadline and the slot is freed
 	waitFor(t, "the slot to free", func() bool { return x.h.live.count() == 0 })
 	waitFor(t, "the router's stream to end", func() bool { return x.router.openStreams() == 0 })
+}
+
+func TestWrongKeyOnAFullRecordIs404(t *testing.T) {
+	x := newHarness(t)
+	x.router.set(func(f *fakeRouter) { f.live[1] = held() })
+	var stops []func()
+	defer func() {
+		for _, stop := range stops {
+			stop()
+		}
+	}()
+	for i := range 8 {
+		stops = append(stops, x.openDirect(id, fmt.Sprintf("198.51.100.%d:4000", 10+i)))
+	}
+	waitFor(t, "eight streams", func() bool { return x.router.openStreams() == 8 })
+	// A wrong key learns nothing of the record, full or not
+	r := x.direct("POST", livePath(id, 1), liveBody(newKey(), ""), "203.0.113.5:4000", x.page())
+	eq(t, r.StatusCode, 404)
+	// The right key still meets the cap
+	r = x.direct("POST", livePath(id, 1), liveBody(key, ""), "203.0.113.6:4000", x.page())
+	eq(t, r.StatusCode, 429)
+	eq(t, r.Header.Get("Retry-After"), "5")
+}
+
+func TestLiveNotFoundAfterTheWaitCountsAsAWrongKey(t *testing.T) {
+	x := newHarness(t)
+	x.router.set(func(f *fakeRouter) {
+		f.live[1] = held()
+		f.delay = 300 * time.Millisecond
+	})
+	r := x.do(t, "POST", livePath(id, 1), liveBody(newKey(), ""), x.page())
+	eq(t, r.StatusCode, 200)
+	eq(t, r.body, "")
+	ids, offenders := x.h.ids.size()
+	eq(t, fmt.Sprint(ids, offenders), "1 1")
+}
+
+func TestLiveNotFoundForARightKeyKeepsItRight(t *testing.T) {
+	x := newHarness(t)
+	eq(t, x.post(t, "POST", id, key).StatusCode, 200)
+	// A job the router will not stream, as for a placement not ready or past its deadline
+	for range 3 {
+		eq(t, x.do(t, "POST", livePath(id, 7), liveBody(key, ""), x.page()).StatusCode, 404)
+	}
+	ids, offenders := x.h.ids.size()
+	eq(t, fmt.Sprint(ids, offenders), "0 0")
+	eq(t, x.h.good.has(sha256.Sum256([]byte(id+"\x00"+key))), true)
+	eq(t, x.post(t, "POST", id, key).StatusCode, 200)
 }

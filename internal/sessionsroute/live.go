@@ -47,7 +47,8 @@ func (h *Handler) watch(q *call, body []byte, seq uint32) {
 	if !ok {
 		return
 	}
-	s, refusal := h.live.add(q.id, q.ip)
+	trusted := h.good.has(q.sum)
+	s, refusal := h.live.add(q.ip)
 	switch refusal {
 	case http.StatusTooManyRequests:
 		h.answer(q, refusal, capRetry)
@@ -57,13 +58,22 @@ func (h *Handler) watch(q *call, body []byte, seq uint32) {
 		return
 	}
 	defer h.live.remove(s)
+	if trusted && !h.live.join(s, q.id) {
+		h.answer(q, http.StatusTooManyRequests, capRetry)
+		return
+	}
+	// accepted joins the record once the router took the key, false when the record is full
+	accepted := func() bool {
+		h.good.add(q.sum)
+		return h.live.join(s, q.id)
+	}
 
 	ctx, cancel := context.WithCancel(q.r.Context())
 	defer cancel()
-	// The call itself waits for the router's first answer, so it runs beside the first frame's
-	// wait. callErr is read only once ended is closed
+	// The call waits for the router's first answer, so it runs beside the first frame's wait
 	frames := make(chan *routerv1.WatchSessionJobResponse)
 	ended := make(chan struct{})
+	// callErr is read only once ended is closed
 	var callErr error
 	go func() {
 		defer close(ended)
@@ -94,12 +104,19 @@ func (h *Handler) watch(q *call, body []byte, seq uint32) {
 	defer wait.Stop()
 	select {
 	case first = <-frames:
-		h.good.add(q.sum)
+		if !accepted() {
+			h.answer(q, http.StatusTooManyRequests, capRetry)
+			return
+		}
 	case <-ended:
-		if callErr != nil {
-			h.refused(q, callErr, false)
-		} else {
+		switch {
+		case callErr == nil:
 			h.answer(q, http.StatusServiceUnavailable, busyRetry)
+		case trusted && connect.CodeOf(callErr) == connect.CodeNotFound:
+			// A right key whose placement is not ready or has ended (SP 7.6)
+			h.answer(q, http.StatusNotFound, 0)
+		default:
+			h.refused(q, callErr, false)
 		}
 		return
 	case <-wait.C:
@@ -139,10 +156,17 @@ func (h *Handler) watch(q *call, body []byte, seq uint32) {
 	for {
 		select {
 		case m := <-frames:
+			if !h.live.joined(s) && !accepted() {
+				return
+			}
 			if end, err := out.frame(m); end || err != nil {
 				return
 			}
 		case <-ended:
+			// A key the router never took counts as wrong even after the 200
+			if !trusted && !h.live.joined(s) && connect.CodeOf(callErr) == connect.CodeNotFound {
+				h.count(q, false)
+			}
 			return
 		case <-keep.C:
 			if out.write([]byte(": keepalive\n\n")) != nil {
@@ -230,20 +254,21 @@ func (s *sseWriter) last() {
 
 /* Stream caps */
 
-// streams holds the open live streams by record, client address and process, SP 7.4
+// streams holds the open live streams by client address and process, and by record once the
+// router took their key, so a wrong key never meets a record's cap (SP 7.4)
 type streams struct {
 	perRecord, perIP, all int
 
 	mu     sync.Mutex
+	open   map[*liveStream]struct{}
 	byID   map[string]map[*liveStream]struct{}
 	byIP   map[netip.Addr]int
-	total  int
 	closed bool
 }
 
 // liveStream is one open stream, told on stop to end with a reason, or with none on shutdown
 type liveStream struct {
-	id   string
+	id   string // set once it joins its record
 	ip   netip.Addr
 	stop chan string
 }
@@ -251,27 +276,42 @@ type liveStream struct {
 // newStreams caps streams per record, per address and in all, 0 or less being no cap
 func newStreams(perRecord, perIP, all int) *streams {
 	return &streams{perRecord: perRecord, perIP: perIP, all: all,
-		byID: map[string]map[*liveStream]struct{}{}, byIP: map[netip.Addr]int{}}
+		open: map[*liveStream]struct{}{}, byID: map[string]map[*liveStream]struct{}{},
+		byIP: map[netip.Addr]int{}}
 }
 
-// add opens a stream, or answers 429 past a cap and 503 once closed
-func (s *streams) add(id string, ip netip.Addr) (*liveStream, int) {
+// add takes an address slot and a process slot, or answers 429 past a cap and 503 once closed
+func (s *streams) add(ip netip.Addr) (*liveStream, int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	switch {
 	case s.closed:
 		return nil, http.StatusServiceUnavailable
-	case over(s.all, s.total), over(s.perRecord, len(s.byID[id])), over(s.perIP, s.byIP[ip]):
+	case over(s.all, len(s.open)), over(s.perIP, s.byIP[ip]):
 		return nil, http.StatusTooManyRequests
 	}
-	ls := &liveStream{id: id, ip: ip, stop: make(chan string, 1)}
+	ls := &liveStream{ip: ip, stop: make(chan string, 1)}
+	s.open[ls] = struct{}{}
+	s.byIP[ip]++
+	return ls, 0
+}
+
+// join counts ls toward record id's cap, false when the record is full
+func (s *streams) join(ls *liveStream, id string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if ls.id != "" {
+		return true
+	}
+	if over(s.perRecord, len(s.byID[id])) {
+		return false
+	}
 	if s.byID[id] == nil {
 		s.byID[id] = map[*liveStream]struct{}{}
 	}
 	s.byID[id][ls] = struct{}{}
-	s.byIP[ip]++
-	s.total++
-	return ls, 0
+	ls.id = id
+	return true
 }
 
 func over(limit, n int) bool {
@@ -281,18 +321,26 @@ func over(limit, n int) bool {
 func (s *streams) remove(ls *liveStream) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	set := s.byID[ls.id]
-	if _, ok := set[ls]; !ok {
+	if _, ok := s.open[ls]; !ok {
 		return
 	}
-	delete(set, ls)
-	if len(set) == 0 {
-		delete(s.byID, ls.id)
+	delete(s.open, ls)
+	if set := s.byID[ls.id]; set != nil {
+		delete(set, ls)
+		if len(set) == 0 {
+			delete(s.byID, ls.id)
+		}
 	}
 	if s.byIP[ls.ip]--; s.byIP[ls.ip] <= 0 {
 		delete(s.byIP, ls.ip)
 	}
-	s.total--
+}
+
+// joined reports whether ls counts toward a record's cap
+func (s *streams) joined(ls *liveStream) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return ls.id != ""
 }
 
 // endRecord ends every stream of the record id with the end reason closed
@@ -309,17 +357,15 @@ func (s *streams) closeAll() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.closed = true
-	for _, set := range s.byID {
-		for ls := range set {
-			ls.tell("")
-		}
+	for ls := range s.open {
+		ls.tell("")
 	}
 }
 
 func (s *streams) count() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.total
+	return len(s.open)
 }
 
 func (ls *liveStream) tell(reason string) {
