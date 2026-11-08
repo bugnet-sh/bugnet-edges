@@ -1,0 +1,21 @@
+# bugnet-edge --role sessions settings, /etc/bugnet/sessions.toml (SP 7.1)
+# Its one secret comes only from the environment, BUGNET_SESSIONS_TOKEN
+
+router_url = "http://127.0.0.1:8080"
+tls_listen_addr = "127.0.0.1:8448"    # TLS for host, PROXY v2 first
+metrics_listen_addr = "127.0.0.1:9105"  # /healthz, /readyz and /metrics
+proxy_protocol_from = ["127.0.0.1/32", "::1/128"]
+host = "sessions.bugnet.sh"           # required, a lowercase host name, the page's origin
+page_dir = "/srv/bugnet/session-page" # root-owned, read-only to bugnet-sessions, read at start
+requests_per_minute = 60              # page calls per client IP (IPv6 by /64), 0 is no limit
+key_failures_per_minute = 20          # per client IP, then 429 for 10 minutes, 0 is no limit
+id_failures_per_minute = 20           # per id, then one router call a second, 0 is no limit
+live_per_record = 8                   # live streams, 0 is no limit
+live_per_ip = 4
+live_max = 256                        # in the whole process
+max_header_bytes = "1MiB"             # a full cookie jar never breaks the page, past it 431
+acme_enabled = true                   # false serves host from the pair in static_dir
+acme_directory = "https://acme-v02.api.letsencrypt.org/directory"
+acme_dir = "/var/lib/bugnet-sessions/acme"
+acme_email = ""
+static_dir = ""                       # fullchain.pem and key.pem, ACME off

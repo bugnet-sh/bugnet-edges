@@ -31,7 +31,11 @@ const (
 	edgeHeaderBytes   = 64 << 10
 	secretsDrain      = time.Minute
 	secretsStreams    = 128
-	hstsValue         = "max-age=31536000"
+	// sessionsDrain lets a record call finish; live streams end at the stop signal, and the
+	// page resumes them from its cursor
+	sessionsDrain   = time.Minute
+	sessionsStreams = 128
+	hstsValue       = "max-age=31536000"
 )
 
 var (
@@ -56,7 +60,14 @@ type SecretsDeps struct {
 	Metrics *metrics.Registry
 }
 
-// Server is one bugnet-edge process, in the edge role or the secrets role
+// SessionsDeps is the sessions role's handler, nil serving the 404 page
+type SessionsDeps struct {
+	Route   http.Handler
+	Log     *slog.Logger
+	Metrics *metrics.Registry
+}
+
+// Server is one bugnet-edge process, in the edge, secrets or sessions role
 type Server struct {
 	role           string
 	tlsAddr        string
@@ -135,15 +146,40 @@ func NewSecrets(cfg SecretsConfig, d SecretsDeps) *Server {
 		},
 		Static: cfg.StaticDir,
 	}
-	host, route := cfg.Host, orNotFound(d.Route)
-	s.handler = withHSTS(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	s.handler = withHSTS(onlyHost(cfg.Host, orNotFound(d.Route)))
+	return s
+}
+
+// NewSessions is the sessions role, serving only its own host with no redirect listener. Its
+// server reads headers up to twice max_header_bytes, so the route itself can answer the ones
+// past max_header_bytes with its 431 page
+func NewSessions(cfg SessionsConfig, d SessionsDeps) *Server {
+	s := newServer("sessions", d.Log, d.Metrics)
+	s.tlsAddr, s.metricsAddr = cfg.TLSListenAddr, cfg.MetricsListenAddr
+	s.trusted = cfg.ProxyProtocolFrom
+	s.drain = sessionsDrain
+	s.maxHeaderBytes, s.maxStreams = 2*int(cfg.MaxHeaderBytes), sessionsStreams
+	s.tlsOptions = tlsconf.Options{
+		Names: []tlsconf.Name{{Host: cfg.Host, ALPN: both}},
+		ACME: tlsconf.ACME{
+			Enabled: cfg.ACMEEnabled, Directory: cfg.ACMEDirectory, Email: cfg.ACMEEmail,
+			StateDir: cfg.ACMEDir,
+		},
+		Static: cfg.StaticDir,
+	}
+	s.handler = withHSTS(onlyHost(cfg.Host, orNotFound(d.Route)))
+	return s
+}
+
+// onlyHost serves route for host and the 404 page for any other
+func onlyHost(host string, route http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if hostOf(r.Host) != host {
 			pages.Write(w, pages.NotFound)
 			return
 		}
 		route.ServeHTTP(w, r)
-	}))
-	return s
+	})
 }
 
 func orNotFound(h http.Handler) http.Handler {

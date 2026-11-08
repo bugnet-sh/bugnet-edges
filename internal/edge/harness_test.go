@@ -35,7 +35,7 @@ const (
 	otherPreview  = "abcdefghijklmnop.preview.bugnet.sh"
 )
 
-// staticPair writes one self-signed pair for every edge name and the secrets host into a new dir
+// staticPair writes one self-signed pair for every edge name and both routes' hosts in a new dir
 func staticPair(t *testing.T) string {
 	t.Helper()
 	k, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -43,7 +43,7 @@ func staticPair(t *testing.T) string {
 		t.Fatal(err)
 	}
 	names := []string{previewDomain, transferHost, hooksHost, "*." + previewDomain,
-		"secrets.bugnet.sh"}
+		"secrets.bugnet.sh", "sessions.bugnet.sh"}
 	tmpl := &x509.Certificate{
 		SerialNumber: big.NewInt(1),
 		Subject:      pkix.Name{CommonName: names[0]},

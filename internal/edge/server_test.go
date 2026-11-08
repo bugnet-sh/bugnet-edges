@@ -361,3 +361,46 @@ func TestSecretsRoleServesOnlyItsHost(t *testing.T) {
 	eq(t, call(t, s2, "GET", "secrets.bugnet.sh", "secrets.bugnet.sh", "/l/x").StatusCode, 200)
 	eq(t, call(t, s2, "GET", "secrets.bugnet.sh", "other.bugnet.sh", "/l/x").StatusCode, 404)
 }
+
+func TestSessionsRoleServesOnlyItsHost(t *testing.T) {
+	c := SessionsDefaults()
+	c.TLSListenAddr, c.MetricsListenAddr = "127.0.0.1:0", "127.0.0.1:0"
+	c.ProxyProtocolFrom = testConfig(t).ProxyProtocolFrom
+	c.Host = "sessions.bugnet.sh"
+	c.ACMEEnabled, c.StaticDir = false, staticPair(t)
+	s := NewSessions(c, SessionsDeps{Route: named("sessions"), Log: quiet()})
+	eq(t, s.role, "sessions")
+	eq(t, s.drain, time.Minute)
+	eq(t, s.addr("redirect"), "")
+	hs := s.tlsServer()
+	eq(t, hs.MaxHeaderBytes, 2<<20)
+	eq(t, hs.WriteTimeout, time.Duration(0))
+	eq(t, hs.HTTP2.MaxConcurrentStreams, 128)
+
+	start(t, s)
+	eq(t, s.addr("redirect"), "")
+	if _, err := dialTLS(t, s.addr("tls"), "secrets.bugnet.sh", "http/1.1"); err == nil {
+		t.Fatal("the sessions role served the secrets host")
+	}
+	conn, err := dialTLS(t, s.addr("tls"), "sessions.bugnet.sh", "h2", "http/1.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	eq(t, conn.ConnectionState().NegotiatedProtocol, "h2")
+	_ = conn.Close()
+	hc := client(t, s.addr("tls"), true)
+	res := fetch(t, hc, "GET", "https://sessions.bugnet.sh/s/abc")
+	eq(t, res.StatusCode, 200)
+	eq(t, res.Header.Get("Strict-Transport-Security"), hsts)
+	// Headers past 1 MiB reach the route, which answers them with its own 431 page
+	c1 := client(t, s.addr("tls"), false)
+	big := strings.Repeat("a", 1500<<10)
+	eq(t, fetch(t, c1, "GET", "https://sessions.bugnet.sh/s/abc", "Cookie", big).StatusCode, 200)
+	code, body := metricsGet(t, s, "/metrics")
+	eq(t, code, 200)
+	eq(t, strings.Contains(body, `edge_cert_days_left{name="sessions.bugnet.sh"} 89`), true)
+
+	eq(t, call(t, s, "GET", "sessions.bugnet.sh", "other.bugnet.sh", "/s/x").StatusCode, 404)
+	eq(t, served(t, NewSessions(c, SessionsDeps{Log: quiet()}), "GET", "sessions.bugnet.sh",
+		"/s/x"), "404 Not Found")
+}

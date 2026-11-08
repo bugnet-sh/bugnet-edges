@@ -248,3 +248,60 @@ func TestSecretsRouteSettingsRefused(t *testing.T) {
 		t.Fatalf("got %v", err)
 	}
 }
+
+const sessToken = "sessions-token-0123456789abcdefghijk"
+
+func TestExampleSessionsLoadsAtTheDefaults(t *testing.T) {
+	cfg, err := LoadSessions("../../example/sessions.toml",
+		env(map[string]string{"BUGNET_SESSIONS_TOKEN": sessToken}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := SessionsDefaults()
+	want.Host = "sessions.bugnet.sh"
+	want.Token = sessToken
+	eq(t, cfg, want)
+	eq(t, cfg.TLSListenAddr, "127.0.0.1:8448")
+	eq(t, cfg.MetricsListenAddr, "127.0.0.1:9105")
+	eq(t, cfg.MaxHeaderBytes, settings.Bytes(1<<20))
+	eq(t, cfg.ACMEDir, "/var/lib/bugnet-sessions/acme")
+	eq(t, cfg.PageDir, "/srv/bugnet/session-page")
+	eq(t, [6]int{cfg.RequestsPerMinute, cfg.KeyFailuresPerMinute, cfg.IDFailuresPerMinute,
+		cfg.LivePerRecord, cfg.LivePerIP, cfg.LiveMax}, [6]int{60, 20, 20, 8, 4, 256})
+}
+
+func TestSessionsSettingsRefused(t *testing.T) {
+	good := env(map[string]string{"BUGNET_SESSIONS_TOKEN": sessToken})
+	const host = "host = \"s.example.test\"\n"
+	for _, tc := range []struct{ doc, want string }{
+		{"", "host is required"},
+		{"host = \"Sessions.example.test\"\n", "host must be a lowercase host name"},
+		{host + "max_header_bytes = \"32KiB\"\n", "max_header_bytes must be 64KiB to 4MiB"},
+		{host + "page_dir = \"x\"\n", "page_dir must be an absolute path"},
+		{host + "requests_per_minute = -1\n", "requests_per_minute must be 0 or more"},
+		{host + "key_failures_per_minute = -1\n", "key_failures_per_minute"},
+		{host + "id_failures_per_minute = -1\n", "id_failures_per_minute"},
+		{host + "live_per_record = -1\n", "live_per_record"},
+		{host + "live_per_ip = -1\n", "live_per_ip"},
+		{host + "live_max = -1\n", "live_max"},
+		{host + "acme_dir = \"\"\n", "acme_dir is required"},
+		{host + "acme_enabled = false\n", "static_dir is required"},
+		{host + "proxy_protocol_from = []\n", "proxy_protocol_from needs"},
+		{host + "tls_listen_addr = \"8448\"\n", "tls_listen_addr must be a host and port"},
+	} {
+		_, err := LoadSessions(writeFile(t, tc.doc), good)
+		if err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%q: got %v, want %q", tc.doc, err, tc.want)
+		}
+	}
+	_, err := LoadSessions(writeFile(t, host), env(nil))
+	if err == nil || !strings.Contains(err.Error(), "BUGNET_SESSIONS_TOKEN is required") {
+		t.Fatalf("got %v", err)
+	}
+	// The secrets route's token is another caller's
+	_, err = LoadSessions(writeFile(t, host),
+		env(map[string]string{"BUGNET_SECRETS_TOKEN": secToken}))
+	if err == nil || !strings.Contains(err.Error(), "BUGNET_SESSIONS_TOKEN is required") {
+		t.Fatalf("got %v", err)
+	}
+}

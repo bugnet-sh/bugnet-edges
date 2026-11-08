@@ -59,6 +59,7 @@ var secrets = env(map[string]string{
 	"BUGNET_EDGE_TOKEN":       "edge-token-0123456789abcdefghijklmnop",
 	"BUGNET_HOOK_PATH_SECRET": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
 	"BUGNET_SECRETS_TOKEN":    "secrets-token-0123456789abcdefghijklmn",
+	"BUGNET_SESSIONS_TOKEN":   "sessions-token-0123456789abcdefghijk",
 })
 
 // freePort is a loopback address no listener holds right now
@@ -274,6 +275,65 @@ static_dir = %q
 	}
 	err := run(t.Context(), quiet(), []string{"-config", path, "--role", "secrets"}, env(nil))
 	if err == nil || !strings.Contains(err.Error(), "BUGNET_SECRETS_TOKEN") {
+		t.Fatalf("got %v", err)
+	}
+}
+
+// pageBundle writes the smallest session page bundle the sessions role loads
+func pageBundle(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, "assets"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for name, body := range map[string]string{
+		"headers.txt":        "Content-Security-Policy: default-src 'none'\n",
+		"index.html":         "<!doctype html><title>session</title>",
+		"assets/page-ABC.js": "1",
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return dir
+}
+
+func TestSessionsRoleServesThePage(t *testing.T) {
+	tlsAddr, metrics := freePort(t), freePort(t)
+	settings := fmt.Sprintf(`
+tls_listen_addr = %q
+metrics_listen_addr = %q
+host = "sessions.example.test"
+acme_enabled = false
+static_dir = %q
+`, tlsAddr, metrics, pairDir(t, "sessions.example.test"))
+	path := writeFile(t, settings+fmt.Sprintf("page_dir = %q\n", pageBundle(t)))
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() {
+		done <- run(ctx, quiet(), []string{"-config", path, "--role", "sessions"}, secrets)
+	}()
+	waitReady(t, metrics, done)
+	code, body := fetchTLS(t, tlsAddr, "sessions.example.test", "/s/k3fz2q7mak3fz2q7")
+	if code != 200 || body != "<!doctype html><title>session</title>" {
+		t.Fatalf("got %d %q", code, body)
+	}
+	if code, _ := fetchTLS(t, tlsAddr, "sessions.example.test", "/robots.txt"); code != 200 {
+		t.Fatalf("got %d", code)
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+
+	err := run(t.Context(), quiet(), []string{"-config", path, "--role", "sessions"}, env(nil))
+	if err == nil || !strings.Contains(err.Error(), "BUGNET_SESSIONS_TOKEN") {
+		t.Fatalf("got %v", err)
+	}
+	// A page_dir without the bundle stops the role at start
+	path = writeFile(t, settings+fmt.Sprintf("page_dir = %q\n", t.TempDir()))
+	err = run(t.Context(), quiet(), []string{"-config", path, "--role", "sessions"}, secrets)
+	if err == nil || !strings.Contains(err.Error(), "headers.txt") {
 		t.Fatalf("got %v", err)
 	}
 }

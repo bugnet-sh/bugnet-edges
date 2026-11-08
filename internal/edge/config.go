@@ -1,4 +1,4 @@
-// Package edge serves bugnet-edge's listeners, host routing, pages and drain, for both roles
+// Package edge serves bugnet-edge's listeners, host routing, pages and drain, for every role
 package edge
 
 import (
@@ -466,6 +466,119 @@ func (c *SecretsConfig) check() error {
 		func() error {
 			if c.MaxHeaderBytes < 4<<10 || c.MaxHeaderBytes > 4<<20 {
 				return errors.New("max_header_bytes must be 4KiB to 4MiB")
+			}
+			return nil
+		},
+		func() error {
+			if !c.ACMEEnabled {
+				return checkDir("static_dir", c.StaticDir)
+			}
+			if err := checkURL("acme_directory", c.ACMEDirectory); err != nil {
+				return err
+			}
+			if c.StaticDir != "" {
+				if err := checkDir("static_dir", c.StaticDir); err != nil {
+					return err
+				}
+			}
+			return checkDir("acme_dir", c.ACMEDir)
+		},
+	}
+	for _, check := range checks {
+		if err := check(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// SessionsConfig is bugnet-edge --role sessions' settings file (SP 7.1) and its token
+type SessionsConfig struct {
+	RouterURL            string         `toml:"router_url"`
+	TLSListenAddr        string         `toml:"tls_listen_addr"`
+	MetricsListenAddr    string         `toml:"metrics_listen_addr"`
+	ProxyProtocolFrom    []netip.Prefix `toml:"proxy_protocol_from"`
+	Host                 string         `toml:"host"`
+	PageDir              string         `toml:"page_dir"`
+	RequestsPerMinute    int            `toml:"requests_per_minute"`
+	KeyFailuresPerMinute int            `toml:"key_failures_per_minute"`
+	IDFailuresPerMinute  int            `toml:"id_failures_per_minute"`
+	LivePerRecord        int            `toml:"live_per_record"`
+	LivePerIP            int            `toml:"live_per_ip"`
+	LiveMax              int            `toml:"live_max"`
+	MaxHeaderBytes       settings.Bytes `toml:"max_header_bytes"`
+	ACMEEnabled          bool           `toml:"acme_enabled"`
+	ACMEDirectory        string         `toml:"acme_directory"`
+	ACMEDir              string         `toml:"acme_dir"`
+	ACMEEmail            string         `toml:"acme_email"`
+	StaticDir            string         `toml:"static_dir"`
+
+	Token string `toml:"-"` // BUGNET_SESSIONS_TOKEN
+}
+
+// SessionsDefaults is every sessions role setting at its default, with no host
+func SessionsDefaults() SessionsConfig {
+	return SessionsConfig{
+		RouterURL:            "http://127.0.0.1:8080",
+		TLSListenAddr:        "127.0.0.1:8448",
+		MetricsListenAddr:    "127.0.0.1:9105",
+		ProxyProtocolFrom:    loopback(),
+		PageDir:              "/srv/bugnet/session-page",
+		RequestsPerMinute:    60,
+		KeyFailuresPerMinute: 20,
+		IDFailuresPerMinute:  20,
+		LivePerRecord:        8,
+		LivePerIP:            4,
+		LiveMax:              256,
+		MaxHeaderBytes:       1 << 20,
+		ACMEEnabled:          true,
+		ACMEDirectory:        letsEncrypt,
+		ACMEDir:              "/var/lib/bugnet-sessions/acme",
+	}
+}
+
+// LoadSessions reads the sessions role's settings file at path over the defaults, then its token
+func LoadSessions(path string, getenv func(string) (string, bool)) (SessionsConfig, error) {
+	c := SessionsDefaults()
+	if err := settings.Load(path, &c); err != nil {
+		return SessionsConfig{}, fmt.Errorf("sessions role: %w", err)
+	}
+	if err := c.check(); err != nil {
+		return SessionsConfig{}, fmt.Errorf("sessions role: %s: %w", path, err)
+	}
+	token, err := callerToken(getenv, "BUGNET_SESSIONS_TOKEN")
+	if err != nil {
+		return SessionsConfig{}, fmt.Errorf("sessions role: %w", err)
+	}
+	c.Token = token
+	return c, nil
+}
+
+func (c *SessionsConfig) check() error {
+	notNegative := func(key string, v int) func() error {
+		return func() error {
+			if v < 0 {
+				return fmt.Errorf("%s must be 0 or more", key)
+			}
+			return nil
+		}
+	}
+	checks := []func() error{
+		func() error { return checkURL("router_url", c.RouterURL) },
+		func() error { return checkAddr("tls_listen_addr", c.TLSListenAddr) },
+		func() error { return checkAddr("metrics_listen_addr", c.MetricsListenAddr) },
+		func() error { return checkPrefixes(c.ProxyProtocolFrom) },
+		func() error { return checkHost("host", c.Host) },
+		func() error { return checkDir("page_dir", c.PageDir) },
+		notNegative("requests_per_minute", c.RequestsPerMinute),
+		notNegative("key_failures_per_minute", c.KeyFailuresPerMinute),
+		notNegative("id_failures_per_minute", c.IDFailuresPerMinute),
+		notNegative("live_per_record", c.LivePerRecord),
+		notNegative("live_per_ip", c.LivePerIP),
+		notNegative("live_max", c.LiveMax),
+		func() error {
+			if c.MaxHeaderBytes < 64<<10 || c.MaxHeaderBytes > 4<<20 {
+				return errors.New("max_header_bytes must be 64KiB to 4MiB")
 			}
 			return nil
 		},

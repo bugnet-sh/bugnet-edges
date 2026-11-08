@@ -4,18 +4,19 @@ The public Go binaries of the Bugnet sandbox router's data plane. They face the 
 provider keys and reach sandboxes only through the `bugnet-run` gate on port 29417. Each one calls
 `router-api` over Connect with its own bearer token.
 
-The binaries are `bugnet-edge` (also run as `bugnet-secrets`), `bugnet-ssh`, `bugnet-egress` and
-`bugnet-certs`. They share the libraries under `internal`. `x402-fake-seller` is a test seller for
-local and mainnet test runs, never deployed with them.
+The binaries are `bugnet-edge` (also run as `bugnet-secrets` and `bugnet-sessions`), `bugnet-ssh`,
+`bugnet-egress` and `bugnet-certs`. They share the libraries under `internal`. `x402-fake-seller` is
+a test seller for local and mainnet test runs, never deployed with them.
 
 ## Layout
 
 | Path | What it holds |
 | --- | --- |
-| `cmd/bugnet-edge` | The HTTP edge, and with `--role secrets` the secrets route |
+| `cmd/bugnet-edge` | The HTTP edge, and with `--role secrets` or `--role sessions` that route |
 | `cmd/bugnet-certs` | Renews the preview wildcards by DNS-01 and checks every served certificate |
 | `cmd/x402-fake-seller` | The fake x402 seller over TLS, settling to a chain or a facilitator |
-| `internal/edge` | Both roles' settings, listeners, host routing, HSTS and drain |
+| `internal/edge` | Every role's settings, listeners, host routing, HSTS and drain |
+| `internal/sessionsroute` | The session page, its record and delete calls, and its live view |
 | `internal/edge/transfer` | The transfer route, uploads and downloads relayed through the router |
 | `internal/pages` | The edge's own HTML pages and the transfer route's JSON errors |
 | `internal/certs` | `bugnet-certs`' settings, renewal, writing by rename and the expiry alert |
@@ -65,13 +66,15 @@ and so does a client below TLS 1.2.
 
 ## bugnet-edge
 
-`bugnet-edge -config FILE [--role edge|secrets]` reads its settings from FILE and its secrets
-from the environment. On SIGTERM or SIGINT it drains and exits. A second signal kills it at once.
+`bugnet-edge -config FILE [--role edge|secrets|sessions]` reads its settings from FILE and its
+secrets from the environment. On SIGTERM or SIGINT it drains and exits. A second signal kills it at
+once.
 
 | Role | Settings | Secrets | Ports |
 | --- | --- | --- | --- |
 | `edge` | `example/edge.toml` | `BUGNET_EDGE_TOKEN`, `BUGNET_HOOK_PATH_SECRET` | 8443, 80, 9101 |
 | `secrets` | `example/secrets-route.toml` | `BUGNET_SECRETS_TOKEN` | 8445, 9104 |
+| `sessions` | `example/sessions.toml` | `BUGNET_SESSIONS_TOKEN` | 8448, 9105 |
 
 `edge` is the default role.
 
@@ -105,16 +108,17 @@ The edge routes by the `Host` header. Anything else gets the 404 page.
 - A request whose `Host` belongs to another route than its TLS name gets 421, so the browser
   opens its own connection. That keeps transfers on HTTP/1.1 and within their per-address
   connection limit. Previews may share a connection, since one wildcard covers them all.
-- The secrets role serves only `host`.
+- The secrets and sessions roles each serve only their `host`.
 
 ### Responses
 
 - Every TLS answer carries `Strict-Transport-Security: max-age=31536000`. Any other value a
   handler or an upstream sets is replaced.
-- Server settings: `ReadHeaderTimeout` 10 s (the TLS handshake too), `IdleTimeout` 2 min, no read
-  or write timeout, `MaxHeaderBytes` 64 KiB on the edge and `max_header_bytes` on the secrets
-  route, HTTP/2 `max_concurrent_streams` (128). Extended CONNECT stays off, so WebSockets
-  always arrive over HTTP/1.1.
+- Server settings: `ReadHeaderTimeout` 10 s (the TLS handshake too), `IdleTimeout` 2 min, no read or
+  write timeout, `MaxHeaderBytes` 64 KiB on the edge, `max_header_bytes` on the secrets route and
+  twice `max_header_bytes` on the sessions route (which answers past it itself), HTTP/2
+  `max_concurrent_streams` (128). Extended CONNECT stays off, so WebSockets always arrive over
+  HTTP/1.1.
 - `internal/pages` writes DP 8.6's pages. They are small static HTML with `Cache-Control:
   no-store`, `Referrer-Policy: no-referrer`, `X-Content-Type-Options: nosniff` and a CSP of
   `default-src 'none'`. They never name a provider. Transfer errors are JSON,
@@ -196,11 +200,51 @@ Bytes count after TLS, toward the sandbox for uploads and from it for downloads,
 placement's lane. Logs name a transfer only by the first 8 hex characters of its token's SHA-256,
 never the token or the path.
 
+### The sessions route
+
+`--role sessions` serves the session page at `sessions.bugnet.sh` (session-page.md 7) and calls
+`SessionPageService` with `BUGNET_SESSIONS_TOKEN`. It holds no root key: the router checks each
+key.
+
+| Method and path | Answer |
+| --- | --- |
+| `GET /s/<id>` | The bundle's `index.html` for any id of 16 `a-z2-7`, never looked up |
+| `GET /assets/<name>` | The bundle's `.js`, `.css`, `.svg` and `.woff2` (`font/woff2`) files |
+| `GET /robots.txt` | `Disallow: /` |
+| `POST /v1/s/<id>`, `{"k"}` | `GetSessionRecord`: 200 with the record, the snapshot or expired |
+| `DELETE /v1/s/<id>`, `{"k"}` | `DeleteSessionRecord`: 204, and the record's live streams end |
+| `POST /v1/s/<id>/jobs/<seq>/live`, `{"k","cursor"}` | `WatchSessionJob` as server-sent events |
+| Anything else | 404 with no body |
+
+- **The bundle** is `page_dir`'s `index.html`, `headers.txt` and `assets/`, read once at start,
+  so a new page needs a restart. Every answer carries `headers.txt`'s headers, the CSP among
+  them. A bundle without a CSP, or one whose `headers.txt` sets a cookie or a content header,
+  stops the role at start. Text files go gzipped to a client that accepts it.
+- **The 200 body** is built around the router's bytes, never parsed:
+  `{"state":"ended","record":<record_json>}`, `{"state":"running","snapshot":<live_json>}` or
+  `{"state":"expired"}`.
+- **Page calls** need `Content-Type: application/json`, `Origin` equal to `https://<host>` and
+  `Sec-Fetch-Site: same-origin`, else 403. `Cookie` is never read. A body over 1 KiB is 413.
+- **An unknown id and a wrong key** both get 404 with no body. The pair is cached as unknown for
+  10 s, so a wrong key never blocks the id's right key.
+- **Limits** (SP 7.4): `requests_per_minute` page calls per client address; past
+  `key_failures_per_minute` wrong keys an address is marked 10 minutes, as for transfers; past
+  `id_failures_per_minute` wrong keys for one id, one call a second for it reaches the router.
+  An IPv6 client counts by its /64. A pair the router accepted skips the wrong key limits for 10
+  minutes, so a right key is never blocked.
+- **Live streams**: `out`, `skip`, `exit` and `end` events, an `id:` line only with a cursor,
+  `: keepalive` every 15 s, a 30 s deadline on each write, and `live_per_record`, `live_per_ip`
+  and `live_max` streams. Each stream has its own HTTP/1.1 connection to the router. On a stop
+  signal the streams end without an `end` event and the page resumes them.
+- **Headers** past `max_header_bytes` get a 431 page that says to clear the `bugnet.sh` cookies.
+- **Logs** name a call by its route, status and the first 8 hex characters of the id's
+  SHA-256, never the body, the key or the link. Strangers' calls log at debug level.
+
 ### Drain
 
 On a stop signal the process answers 503 on `/readyz`, stops accepting, and lets open requests
-finish. Connections a handler hijacked, such as WebSockets, may stay open up to `drain` (5
-minutes on the edge, 1 minute on the secrets route). Then everything left is closed. With
+finish. Connections a handler hijacked, such as WebSockets, may stay open up to `drain` (5 minutes
+on the edge, 1 minute on the secrets and sessions routes). Then everything left is closed. With
 nothing open, the process exits at once.
 
 ### Certificates

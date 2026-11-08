@@ -1,4 +1,4 @@
-// Command bugnet-edge serves the public HTTP edge, or with --role secrets the secrets route
+// Command bugnet-edge serves the public HTTP edge, or with --role secrets or sessions that route
 package main
 
 import (
@@ -19,6 +19,7 @@ import (
 	"github.com/oynozan/bugnet-edges/internal/metrics"
 	"github.com/oynozan/bugnet-edges/internal/pages"
 	"github.com/oynozan/bugnet-edges/internal/routerclient"
+	"github.com/oynozan/bugnet-edges/internal/sessionsroute"
 	"github.com/oynozan/bugnet-edges/internal/strangers"
 	"github.com/oynozan/bugnet-edges/internal/traffic"
 )
@@ -36,7 +37,7 @@ func main() {
 	}
 }
 
-var errUsage = errors.New("usage: bugnet-edge -config FILE [--role edge|secrets]")
+var errUsage = errors.New("usage: bugnet-edge -config FILE [--role edge|secrets|sessions]")
 
 func run(
 	ctx context.Context, log *slog.Logger, args []string, getenv func(string) (string, bool),
@@ -44,7 +45,7 @@ func run(
 	fs := flag.NewFlagSet("bugnet-edge", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	path := fs.String("config", "", "settings file")
-	role := fs.String("role", "edge", "edge or secrets")
+	role := fs.String("role", "edge", "edge, secrets or sessions")
 	if err := fs.Parse(args); err != nil || fs.NArg() > 0 || *path == "" {
 		return errUsage
 	}
@@ -61,8 +62,46 @@ func run(
 			return err
 		}
 		return edge.NewSecrets(cfg, edge.SecretsDeps{Log: log, Metrics: metrics.New()}).Run(ctx)
+	case "sessions":
+		cfg, err := edge.LoadSessions(*path, getenv)
+		if err != nil {
+			return err
+		}
+		return runSessions(ctx, cfg, log)
 	}
 	return errUsage
+}
+
+// runSessions serves the session page from its bundle, read once at start
+func runSessions(ctx context.Context, cfg edge.SessionsConfig, log *slog.Logger) error {
+	bundle, err := sessionsroute.LoadBundle(cfg.PageDir)
+	if err != nil {
+		return err
+	}
+	router := routerv1connect.NewSessionPageServiceClient(
+		routerclient.New(cfg.RouterURL, cfg.Token), cfg.RouterURL)
+	// Each live stream gets its own HTTP/1.1 connection, so one stalled reader stalls no other
+	newCall := func() routerv1connect.SessionPageServiceClient {
+		return routerv1connect.NewSessionPageServiceClient(
+			routerclient.PerCall(cfg.RouterURL, cfg.Token), cfg.RouterURL)
+	}
+	route := sessionsroute.New(router, newCall, sessionsroute.Options{
+		Origin:               "https://" + cfg.Host,
+		Bundle:               bundle,
+		MaxHeaderBytes:       int(cfg.MaxHeaderBytes),
+		RequestsPerMinute:    cfg.RequestsPerMinute,
+		KeyFailuresPerMinute: cfg.KeyFailuresPerMinute,
+		IDFailuresPerMinute:  cfg.IDFailuresPerMinute,
+		LivePerRecord:        cfg.LivePerRecord,
+		LivePerIP:            cfg.LivePerIP,
+		LiveMax:              cfg.LiveMax,
+		Log:                  log.With("role", "sessions"),
+	})
+	// Live streams end at the stop signal rather than hold the drain, and the page resumes them
+	context.AfterFunc(ctx, route.Close)
+	defer route.Close()
+	return edge.NewSessions(cfg, edge.SessionsDeps{Route: route, Log: log, Metrics: metrics.New()}).
+		Run(ctx)
 }
 
 // runEdge serves the edge role with one set of traffic pieces, kept running through the drain
