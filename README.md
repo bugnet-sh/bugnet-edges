@@ -273,7 +273,9 @@ The router's refusals map to pages:
 each `bugnet_token=bnp_...` pair from the raw query by hand and keeps the rest byte for byte. It
 deletes every client `Bugnet-*` header and `__Host-bnp` and the route's own cookie names from
 `Cookie`, then adds the route's headers and cookies, `Bugnet-Port`, `Bugnet-Host` and
-`Bugnet-Client-Ip`. `Authorization`, `Origin`, `Sec-WebSocket-*` and the app's cookies pass.
+`Bugnet-Client-Ip`. It moves the client's `Origin` to `Bugnet-Origin`, since Boat's proxy refuses
+a WebSocket upgrade that carries `Origin`. The gate puts it back before the app. `Authorization`,
+`Sec-WebSocket-*` and the app's cookies pass.
 The route's blocked prefixes (Koyeb's `/koyeb-sandbox/`) and the bare prefix without its slash
 get the 404 page, checked in lower case on the raw and decoded path, with repeated slashes and
 dot segments collapsed.

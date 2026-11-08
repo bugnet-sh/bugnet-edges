@@ -375,7 +375,8 @@ func TestIsolation(t *testing.T) {
 	eq(t, got.Get(headerName), "")
 	eq(t, got.Get("X-Forwarded-For"), "")
 	eq(t, got.Get("Authorization"), "Bearer app-token")
-	eq(t, got.Get("Origin"), "https://"+host)
+	eq(t, got.Values("Origin"), []string(nil))
+	eq(t, got.Get(originHeader), "https://"+host)
 	eq(t, x.gate.last().host, strings.TrimPrefix(x.gate.srv.URL, "https://"))
 	eq(t, res.Header.Values("Set-Cookie"), []string{
 		"app=1; Path=/; Secure", "plain=2",
@@ -386,6 +387,37 @@ func TestIsolation(t *testing.T) {
 	res, _ = x.get(t, at("/"), "Cookie", big, headerName, x.pv.token)
 	eq(t, res.StatusCode, http.StatusOK)
 	eq(t, len(x.gate.last().header.Get("Cookie")), len(big+"; _port_auth=route-cookie"))
+}
+
+func TestOriginTravelsAsBugnetOrigin(t *testing.T) { // ruling 18W
+	x := newHarness(t)
+	origin := "https://" + host
+	res, _ := x.get(t, at("/"), headerName, x.pv.token, "Origin", origin,
+		originHeader, "https://forged.example")
+	eq(t, res.StatusCode, http.StatusOK)
+	got := x.gate.last().header
+	eq(t, got.Values("Origin"), []string(nil))
+	eq(t, got.Values(originHeader), []string{origin})
+
+	// A client's own Bugnet-Origin never passes, with or without Origin
+	res, _ = x.get(t, at("/"), headerName, x.pv.token, originHeader, origin)
+	eq(t, res.StatusCode, http.StatusOK)
+	got = x.gate.last().header
+	eq(t, got.Values("Origin"), []string(nil))
+	eq(t, got.Values(originHeader), []string(nil))
+
+	code, _ := x.dialWS(t, host, "/ws", headerName, x.pv.token, "Origin", origin,
+		originHeader, "https://forged.example")
+	eq(t, code, http.StatusSwitchingProtocols)
+	got = x.gate.last().header
+	eq(t, got.Values("Origin"), []string(nil))
+	eq(t, got.Values(originHeader), []string{origin})
+
+	code, _ = x.dialWS(t, host, "/ws", headerName, x.pv.token, originHeader, origin)
+	eq(t, code, http.StatusSwitchingProtocols)
+	got = x.gate.last().header
+	eq(t, got.Values("Origin"), []string(nil))
+	eq(t, got.Values(originHeader), []string(nil))
 }
 
 func TestResponseRewriting(t *testing.T) {

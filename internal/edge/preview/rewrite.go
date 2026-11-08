@@ -16,6 +16,7 @@ const (
 	portHeader     = "Bugnet-Port"
 	hostHeader     = "Bugnet-Host"
 	clientIPHeader = "Bugnet-Client-Ip"
+	originHeader   = "Bugnet-Origin"
 	markHeader     = "Bugnet-Gate-Response"
 	errorHeader    = "Bugnet-Gate-Error"
 	cacheHeader    = "Bugnet-Cache-Control"
@@ -48,6 +49,11 @@ func (h *handler) rewrite(pr *httputil.ProxyRequest) {
 		if strings.HasPrefix(strings.ToLower(name), bugnetPrefix) {
 			delete(hd, name)
 		}
+	}
+	// Boat's proxy refuses a WebSocket upgrade with Origin, so the gate restores it, ruling 18W
+	if v, ok := hd["Origin"]; ok {
+		hd[originHeader] = v
+		delete(hd, "Origin")
 	}
 	requestCookies(hd, c.rt)
 	for _, v := range c.rt.headers {
