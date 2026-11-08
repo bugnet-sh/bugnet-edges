@@ -55,8 +55,9 @@ func ParseResponse(values []string) Hint {
 	if settled {
 		h.Kind = HintSuccess
 	}
-	if sig, ok := Decode58(text(top["transaction"])); ok && len(sig) == 64 {
-		h.Tx = text(top["transaction"])
+	tx := text(top["transaction"])
+	if sig, ok := Decode58(tx); ok && len(sig) == 64 {
+		h.Tx = tx
 	}
 	if reason := text(top["errorReason"]); errorReason.MatchString(reason) {
 		h.Error = reason
