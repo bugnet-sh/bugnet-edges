@@ -267,7 +267,9 @@ func (h *Handler) v1(w http.ResponseWriter, r *http.Request, path string) {
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBody))
 	if err != nil {
 		// The deadline stays, so the server never waits on the rest of the body
-		w.Header().Set("Connection", "close")
+		if r.ProtoMajor == 1 {
+			w.Header().Set("Connection", "close")
+		}
 		mbe := (*http.MaxBytesError)(nil)
 		switch {
 		case errors.As(err, &mbe):

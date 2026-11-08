@@ -8,12 +8,14 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
+	"testing/iotest"
 	"time"
 
 	"connectrpc.com/connect"
@@ -444,12 +446,30 @@ func TestIDTablesStayBounded(t *testing.T) {
 		g.failed(fmt.Sprintf("id%d", i), ip)
 	}
 	ids, offenders := g.size()
-	eq(t, ids <= maxIDs && offenders <= maxOffenders, true)
-	// Past idHot the expired entries give way before any live one
-	clock.advance(2 * idHot)
+	eq(t, fmt.Sprint(ids, offenders), fmt.Sprint(maxIDs, maxIDs+10))
+	// Seconds later a full table sweeps out its refilled ids, well before the minute sweep
+	clock.advance(4 * time.Second)
 	g.failed("fresh", ip)
 	ids, offenders = g.size()
+	eq(t, fmt.Sprint(ids, offenders), fmt.Sprint(1, maxIDs+11))
+	// Past idHot the minute sweep drops the offenders too
+	clock.advance(2 * idHot)
+	g.failed("later", ip)
+	ids, offenders = g.size()
 	eq(t, fmt.Sprint(ids, offenders), "1 1")
+}
+
+func TestBodyErrorClosesOnlyAnHTTP1Connection(t *testing.T) {
+	x := newHarness(t)
+	for major, want := range map[int]string{1: "close", 2: ""} {
+		r := httptest.NewRequest("POST", "/v1/s/"+id, iotest.ErrReader(io.ErrUnexpectedEOF))
+		r.ProtoMajor = major
+		r.Header = x.page()
+		w := httptest.NewRecorder()
+		x.h.ServeHTTP(w, r)
+		eq(t, fmt.Sprint(major, w.Code, w.Header().Get("Connection")),
+			fmt.Sprint(major, 400, want))
+	}
 }
 
 func TestIPv6CountsBy64(t *testing.T) {
