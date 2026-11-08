@@ -261,15 +261,19 @@ metrics_listen_addr = %q
 host = "secrets.example.test"
 acme_enabled = false
 static_dir = %q
-`, tlsAddr, metrics, pairDir(t, "secrets.example.test")))
+page_dir = %q
+`, tlsAddr, metrics, pairDir(t, "secrets.example.test"), pageBundle(t)))
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
 	go func() {
 		done <- run(ctx, quiet(), []string{"-config", path, "--role", "secrets"}, secrets)
 	}()
 	waitReady(t, metrics, done)
-	code, _ := fetchTLS(t, tlsAddr, "secrets.example.test", "/l/abc")
-	if code != 404 {
+	code, body := fetchTLS(t, tlsAddr, "secrets.example.test", "/l/abc")
+	if code != 200 || body != "<!doctype html><title>session</title>" {
+		t.Fatalf("got %d %q", code, body)
+	}
+	if code, _ := fetchTLS(t, tlsAddr, "secrets.example.test", "/nope"); code != 404 {
 		t.Fatalf("got %d", code)
 	}
 	cancel()
@@ -278,6 +282,22 @@ static_dir = %q
 	}
 	err := run(t.Context(), quiet(), []string{"-config", path, "--role", "secrets"}, env(nil))
 	if err == nil || !strings.Contains(err.Error(), "BUGNET_SECRETS_TOKEN") {
+		t.Fatalf("got %v", err)
+	}
+}
+
+func TestSecretsRoleNeedsItsPage(t *testing.T) {
+	dir := t.TempDir()
+	path := writeFile(t, fmt.Sprintf(`
+tls_listen_addr = %q
+metrics_listen_addr = %q
+host = "secrets.example.test"
+acme_enabled = false
+static_dir = %q
+page_dir = %q
+`, freePort(t), freePort(t), pairDir(t, "secrets.example.test"), dir))
+	err := run(t.Context(), quiet(), []string{"-config", path, "--role", "secrets"}, secrets)
+	if err == nil || !strings.Contains(err.Error(), "secrets route: the page") {
 		t.Fatalf("got %v", err)
 	}
 }
