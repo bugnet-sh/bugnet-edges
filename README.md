@@ -1027,6 +1027,36 @@ A size in plain bytes may be bare or quoted, so `65536` and `"65536"` are the sa
 
 Secrets never go in these files. They come from the environment.
 
+## On the VPS
+
+`bugnet-router`'s `deploy/vps` deploys these binaries (DP 15, its `README.md` is the runbook).
+Each runs as its own user from `/opt/bugnet/<dir>/<version>/` in a templated unit, so a new
+version starts beside the old one on the same ports with `SO_REUSEPORT`, and the old one drains.
+
+| Unit | Binary | Settings | Env file | Credentials |
+| --- | --- | --- | --- | --- |
+| `bugnet-edge@` | `edge/bugnet-edge` | `edge.toml` | `edge.env` | None |
+| `bugnet-secrets@` | `edge/bugnet-edge --role secrets` | `secrets-route.toml` | `secrets-route.env` | None |
+| `bugnet-sessions@` | `edge/bugnet-edge --role sessions` | `sessions.toml` | `sessions.env` | None |
+| `bugnet-ssh@` | `ssh/bugnet-ssh` | `ssh.toml` | `ssh.env` | `ssh_host_ed25519_key` |
+| `bugnet-egress@` | `egress/bugnet-egress serve` | `egress.toml` | `egress.env` | `egress_ca_key`, `egress_box_k1`, `egress_x402_client_key` |
+| `bugnet-certs.timer` | `certs/bugnet-certs` | `certs.toml` | `certs.env` | None |
+
+- Settings and env files sit in `/etc/bugnet/`, the env files `root:root 0600`, read by systemd
+  before it drops to the service user. Keys sit in `/etc/bugnet/keys/` (`root:root 0600`) and
+  reach a service only as a credential, never in its environment.
+- Egress's x402 files (XS 6.17): `/etc/bugnet/internal-ca.pem` and
+  `/etc/bugnet/egress-x402-client.pem` (root 0644), and the key
+  `/etc/bugnet/keys/egress-x402-client.key` (root 0600), loaded by
+  `LoadCredential=egress_x402_client_key:/etc/bugnet/keys/egress-x402-client.key`. Egress calls
+  Payments' signer at `https://127.0.0.1:8449` as `bugnet-payments.internal`, with
+  `payments_timeout` (3s) above Payments' `sign_timeout` (2s).
+- `systemctl reload 'bugnet-egress@*'` sends `SIGHUP`, which reads the client certificate and
+  the CA again (`Reload`); a renewal needs nothing more. A new key needs a new process, so it
+  ships as a deploy.
+- From 30 days before the client certificate expires, egress logs one error line a day naming the
+  file and the days left; the deploy check fails from 30 days too.
+
 ## Prerequisites
 
 - Go 1.27
