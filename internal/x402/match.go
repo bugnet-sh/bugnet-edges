@@ -47,7 +47,7 @@ func prefixShaped(p string) bool {
 // Pay is what a matched service can do for this request
 type Pay int
 
-// The values of Pay, in the order Payability checks them
+// The values of Pay, Payable when no check refuses
 const (
 	Payable Pay = iota
 	SelfPaid
