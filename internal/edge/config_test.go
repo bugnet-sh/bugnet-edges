@@ -86,6 +86,7 @@ func TestEdgeDefaults(t *testing.T) {
 		ResolveCache: 10000, RouteTTL: settings.Duration(time.Minute),
 		TokenFailuresPerMinute: 20, QueueWait: settings.Duration(30 * time.Second),
 		QueueMax: 256, AbuseContact: "abuse@example.test", BoatRequestsPerMinute: 5000,
+		BoatHostSuffix: "on.boat.dev",
 	})
 	eq(t, cfg.Transfers, Transfers{
 		Chunk: 256 << 10, IdleTimeout: settings.Duration(time.Minute),
@@ -99,6 +100,15 @@ func TestEdgeDefaults(t *testing.T) {
 		Enabled: true, Directory: "https://acme-v02.api.letsencrypt.org/directory",
 		StateDir: "/var/lib/bugnet-edge", WildcardDir: "/var/lib/bugnet-certs/preview",
 	})
+}
+
+func TestBoatLimitOffNeedsNoSuffix(t *testing.T) {
+	off := minimal + "boat_requests_per_minute = 0\nboat_host_suffix = \"\"\n"
+	cfg, err := Load(writeFile(t, off), edgeEnv())
+	if err != nil {
+		t.Fatal(err)
+	}
+	eq(t, cfg.Previews.BoatHostSuffix, "")
 }
 
 func TestEdgeIDIsHostAndPIDWhenEmpty(t *testing.T) {
@@ -149,6 +159,9 @@ func TestEdgeSettingsRefused(t *testing.T) {
 		{minimal + "queue_max = 0\n", "previews.queue_max must be at least 1"},
 		{minimal + "token_failures_per_minute = -1\n", "previews.token_failures_per_minute"},
 		{minimal + "boat_requests_per_minute = -1\n", "previews.boat_requests_per_minute"},
+		{minimal + "boat_host_suffix = \".on.boat.dev\"\n",
+			"previews.boat_host_suffix must be a lowercase host name"},
+		{minimal + "boat_host_suffix = \"\"\n", "previews.boat_host_suffix is required while"},
 		{minimal + "[transfers]\nchunk = \"1KiB\"\n", "transfers.chunk must be 4KiB to 4MiB"},
 		{minimal + "[transfers]\nidle_timeout = \"0s\"\n", "transfers.idle_timeout must be"},
 		{minimal + "[transfers]\nmax_connections_per_ip = 0\n",

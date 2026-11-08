@@ -24,6 +24,7 @@ queue_wait = "30s"
 queue_max = 256                       # waiting requests per placement, then 503 at once
 abuse_contact = "support@bugnet.org"     # required, a mail address or an https URL
 boat_requests_per_minute = 5000       # edge-wide toward Boat, 0 = off after the 16.3 test
+boat_host_suffix = "on.boat.dev"      # a route whose host ends in this counts as Boat's
 
 [transfers]
 chunk = "256KiB"                      # edge to router message size
