@@ -14,6 +14,7 @@ lint:
 build:
 	go build ./...
 	go build -o bin/x402-fake-seller ./cmd/x402-fake-seller
+	go build -o bin/bugnet-egress ./cmd/bugnet-egress
 
 # Copies the dev wildcard pair from the VPS over the admin SSH, so the DNS token never leaves it
 dev-certs:

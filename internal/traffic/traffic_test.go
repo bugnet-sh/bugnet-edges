@@ -203,3 +203,57 @@ func TestAnEndedLeaseDropsItsLane(t *testing.T) {
 		eq(t, took > 900*time.Millisecond && took < 1100*time.Millisecond, true)
 	})
 }
+
+func TestTapSeesEventsBeforeTheLeases(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		f := newFake()
+		var order []string
+		p := f.parts()
+		p.Tap = func(ev *routerv1.EdgeEvent) {
+			order = append(order, "tap")
+			eq(t, ev.GetBudgetSpent().GetPlacementId(), "p1")
+		}
+		tr := New(p, Settings{ReporterID: "x", ReportInterval: time.Hour}, nil)
+		ctx, cancel := context.WithCancel(t.Context())
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			tr.Run(ctx)
+		}()
+		l := tr.Hold("p1", live(gib), 0)
+		f.events <- &routerv1.EdgeEvent{Event: &routerv1.EdgeEvent_BudgetSpent{
+			BudgetSpent: &routerv1.BudgetSpent{PlacementId: "p1",
+				Kind: routerv1.BudgetKind_BUDGET_KIND_EDGE}}}
+		synctest.Wait()
+		eq(t, order, []string{"tap"})
+		eq(t, l.Reason(), lease.ReasonBudget)
+		cancel()
+		<-done
+	})
+}
+
+func TestEgressChecksLeasesOnTheSettingsInterval(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		f := newFake()
+		checks := 0
+		p := f.parts()
+		p.Check = func(context.Context, lease.CheckIn) (lease.CheckOut, error) {
+			checks++
+			return lease.CheckOut{States: map[string]lease.State{"p1": live(gib)}}, nil
+		}
+		tr := New(p, Settings{ReporterID: "x", ReportInterval: time.Hour,
+			CheckEvery: 10 * time.Second}, nil)
+		ctx, cancel := context.WithCancel(t.Context())
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			tr.Run(ctx)
+		}()
+		tr.Hold("p1", live(gib), 0)
+		time.Sleep(35 * time.Second)
+		synctest.Wait()
+		eq(t, checks, 3)
+		cancel()
+		<-done
+	})
+}

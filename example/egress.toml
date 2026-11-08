@@ -1,0 +1,33 @@
+# bugnet-egress settings, /etc/bugnet/egress.toml (DP 10.8)
+# Its secrets come only from the environment, BUGNET_EGRESS_TOKEN and BUGNET_EGRESS_FETCH_TOKEN,
+# and the CA key and box keys from systemd credentials
+
+router_url = "http://127.0.0.1:8080"
+listen_addr = "127.0.0.1:9443"                 # TLS for egress_host, PROXY v2 first
+metrics_listen_addr = "127.0.0.1:9103"         # /healthz, /readyz and /metrics
+proxy_protocol_from = ["127.0.0.1/32", "::1/128"]
+egress_host = "egress.bugnet.sh"               # required, a lowercase host name
+acme_enabled = true                            # false serves egress_host from the pair in static_dir
+acme_directory = "https://acme-v02.api.letsencrypt.org/directory"
+acme_dir = "/var/lib/bugnet-egress/acme"
+acme_email = ""
+static_dir = ""                                # fullchain.pem and key.pem, ACME off
+ca_credential = "egress_ca_key"                # name under $CREDENTIALS_DIRECTORY
+ca_cert_file = "/etc/bugnet/egress-ca.pem"
+ca_version = 1
+# A CA kept after a rotation, for the sandboxes that started under it
+# old_cas = [{ version = 1, credential = "egress_ca_key_v1", cert_file = "/etc/bugnet/egress-ca-v1.pem" }]
+box_keys = [{ id = "k1", credential = "egress_box_k1" }]   # newest first
+resolvers = ["1.1.1.1:53", "8.8.8.8:53"]
+refused_hosts = ["bugnet.sh", "e2b.app", "e2b.dev", "e2b-juliett.dev", "boxd.sh", "koyeb.app",
+    "boat.dev", "ascii.dev"]                   # and every name under them
+max_tunnels_per_placement = 64
+max_streams_per_tunnel = 32                    # HTTP/2 streams on one tunnel
+tunnel_idle_timeout = "5m"
+handshake_timeout = "10s"                      # outer TLS and the upgrade's headers
+token_failures_per_minute = 20                 # per source IP, then 429 for 10 minutes
+fetch_sources = ["127.0.0.1/32", "::1/128"]    # PROXY v2 sources that may send bnf_
+custom_host_requests_per_minute = 600          # per custom host, all placements together
+total_bytes_per_second = "16MiB"               # every placement together, both ways
+resolve_cache = "30s"
+usage_report_interval = "5s"
