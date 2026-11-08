@@ -267,7 +267,7 @@ func (s *Server) carry(p *placement, ws *websocket.Conn) {
 	if err != nil {
 		return
 	}
-	s.conns.Store(inner, &connInfo{p: p, sni: inner.ConnectionState().ServerName})
+	s.conns.Store(inner, &connInfo{p: p, sni: normalHost(inner.ConnectionState().ServerName)})
 	defer s.conns.Delete(inner)
 	if !s.innerLn.push(inner) {
 		return
