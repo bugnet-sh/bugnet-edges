@@ -28,9 +28,12 @@ import (
 const (
 	readHeaderTimeout = 10 * time.Second
 	idleTimeout       = 2 * time.Minute
-	edgeHeaderBytes   = 64 << 10
-	secretsDrain      = time.Minute
-	secretsStreams    = 128
+	// previewHeaderBytes lets a preview carry a full bugnet.sh cookie jar, ruling E1
+	previewHeaderBytes = 1 << 20
+	// edgeHeaderBytes is what transfer, hooks and the redirect take, since only programs call them
+	edgeHeaderBytes = 64 << 10
+	secretsDrain    = time.Minute
+	secretsStreams  = 128
 	// sessionsDrain lets a record call finish, live streams ending at the stop signal
 	sessionsDrain   = time.Minute
 	sessionsStreams = 128
@@ -107,7 +110,7 @@ func New(cfg Config, d Deps) *Server {
 		cfg.TLSListenAddr, cfg.RedirectListenAddr, cfg.MetricsListenAddr
 	s.trusted = cfg.ProxyProtocolFrom
 	s.drain = time.Duration(cfg.Drain)
-	s.maxHeaderBytes, s.maxStreams = edgeHeaderBytes, cfg.MaxConcurrentStreams
+	s.maxHeaderBytes, s.maxStreams = previewHeaderBytes, cfg.MaxConcurrentStreams
 	n := cfg.Names
 	s.tlsOptions = tlsconf.Options{
 		Names: []tlsconf.Name{
@@ -388,6 +391,10 @@ func (h *hosts) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if (rt == routeTransfer || rt == routeHooks) && headerBytes(r) > edgeHeaderBytes {
+		tooLarge(w, rt)
+		return
+	}
 	path := r.URL.EscapedPath()
 	switch {
 	case rt == routePreview && previewID.MatchString(label):
@@ -401,6 +408,27 @@ func (h *hosts) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	default:
 		pages.Write(w, pages.NotFound)
 	}
+}
+
+// headerBytes is about what the request's line and headers took on the wire
+func headerBytes(r *http.Request) int {
+	n := len(r.Method) + len(r.RequestURI) + len(r.Proto) + len(r.Host) + 12
+	for k, vs := range r.Header {
+		for _, v := range vs {
+			n += len(k) + len(v) + 4
+		}
+	}
+	return n
+}
+
+// tooLarge answers 431 on a name that keeps the small header limit, and closes the connection
+func tooLarge(w http.ResponseWriter, rt route) {
+	w.Header().Set("Connection", "close")
+	if rt == routeTransfer {
+		pages.WriteJSON(w, pages.HeadersTooLarge)
+		return
+	}
+	pages.Write(w, pages.TooLarge)
 }
 
 // transferPath is /<token> or /<token>/<name>

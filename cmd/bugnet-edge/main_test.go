@@ -33,6 +33,9 @@ import (
 	"github.com/bugnet-sh/bugnet-proto/gen/go/bugnet/router/v1/routerv1connect"
 	pp "github.com/pires/go-proxyproto"
 	"google.golang.org/genproto/googleapis/rpc/errdetails"
+
+	"github.com/bugnet-sh/bugnet-edges/internal/edge"
+	"github.com/bugnet-sh/bugnet-edges/internal/traffic"
 )
 
 // TestMain runs main itself when a test starts this binary as bugnet-edge
@@ -457,5 +460,60 @@ static_dir = %q
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatalf("still draining 3 s after the second signal\n%s", stderr.String())
+	}
+}
+
+// Failed tokens on the preview route never mark an address on the transfer route, or the reverse
+func TestPreviewAndTransferGuardsAreSeparate(t *testing.T) {
+	cfg := edge.Defaults()
+	cfg.EdgeID = "edge-test"
+	cfg.Names = edge.Names{PreviewDomain: "preview.bugnet.sh", TransferHost: "transfer.bugnet.sh",
+		HooksHost: "hooks.bugnet.sh"}
+	cfg.Previews.AbuseContact = "support@bugnet.org"
+	// Malformed tokens never reach the router, so none answers here
+	router := routerv1connect.NewEdgeServiceClient(http.DefaultClient, "http://127.0.0.1:1")
+	newCall := func() routerv1connect.EdgeServiceClient { return router }
+	tr := traffic.Edge(router, traffic.Settings{ReporterID: "edge-test",
+		ReportInterval: time.Minute}, quiet())
+	d := edgeRoutes(cfg, router, newCall, tr, quiet())
+	send := func(h http.Handler, from, url string, header ...string) int {
+		r := httptest.NewRequest(http.MethodGet, url, nil)
+		r.RemoteAddr = from + ":4000"
+		for i := 0; i+1 < len(header); i += 2 {
+			r.Header.Set(header[i], header[i+1])
+		}
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		return w.Code
+	}
+	preview := func(from string) int {
+		return send(d.Preview, from, "https://k3fz2q7mak3fz2q7.preview.bugnet.sh/",
+			"Bugnet-Token", "bnp_bad")
+	}
+	transfer := func(from string) int {
+		return send(d.Transfer, from, "https://transfer.bugnet.sh/bnx_bad")
+	}
+	for range 20 {
+		if code := preview("192.0.2.7"); code != http.StatusUnauthorized {
+			t.Fatalf("a bad preview token answered %d before the limit", code)
+		}
+	}
+	if code := preview("192.0.2.7"); code != http.StatusTooManyRequests {
+		t.Fatalf("the 21st bad preview token answered %d, want 429", code)
+	}
+	if code := transfer("192.0.2.7"); code != http.StatusNotFound {
+		t.Fatalf("the transfer route answered %d for an address only previews marked", code)
+	}
+	for range 21 {
+		transfer("192.0.2.8")
+	}
+	if code := transfer("192.0.2.8"); code != http.StatusTooManyRequests {
+		t.Fatalf("the transfer route answered %d past its limit, want 429", code)
+	}
+	if code := preview("192.0.2.8"); code != http.StatusUnauthorized {
+		t.Fatalf("the preview route answered %d for an address only transfers marked", code)
+	}
+	if d.Landing == nil || d.Hooks != nil {
+		t.Fatal("the edge serves the landing page and, until hooks land, no hooks route")
 	}
 }

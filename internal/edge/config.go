@@ -58,6 +58,8 @@ type Previews struct {
 	QueueMax               int               `toml:"queue_max"`
 	AbuseContact           string            `toml:"abuse_contact"`
 	BoatRequestsPerMinute  int               `toml:"boat_requests_per_minute"`
+	// BoatHostSuffix names Boat's routes, whose hosts end in it, for the edge-wide limit
+	BoatHostSuffix string `toml:"boat_host_suffix"`
 }
 
 // Transfers holds the transfer route's message size and limits
@@ -114,6 +116,7 @@ func Defaults() Config {
 			QueueWait:              settings.Duration(30 * time.Second),
 			QueueMax:               256,
 			BoatRequestsPerMinute:  5000,
+			BoatHostSuffix:         "on.boat.dev",
 		},
 		Transfers: Transfers{
 			Chunk:                  256 << 10,
@@ -255,6 +258,12 @@ func (p Previews) check() error {
 		return errors.New("previews.queue_max must be at least 1")
 	case p.BoatRequestsPerMinute < 0:
 		return errors.New("previews.boat_requests_per_minute must be 0 or more")
+	case p.BoatHostSuffix != "" && !hostname.Valid(p.BoatHostSuffix):
+		return errors.New("previews.boat_host_suffix must be a lowercase host name such as " +
+			"on.boat.dev, or empty")
+	case p.BoatHostSuffix == "" && p.BoatRequestsPerMinute > 0:
+		return errors.New("previews.boat_host_suffix is required while " +
+			"previews.boat_requests_per_minute is more than 0")
 	}
 	if err := positive("previews.route_ttl", p.RouteTTL); err != nil {
 		return err

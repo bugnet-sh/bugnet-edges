@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+<head>
+{{template "style"}}
+<title>Before you continue</title>
+</head>
+<body>
+<main>
+<h1>Before you continue</h1>
+<p>{{.Text}}</p>
+<p>The sandbox started {{.Started}} and ends {{.Ends}}.</p>
+{{- if .Source}}
+<p>Source: <code>{{.Source}}</code></p>
+{{- end}}
+<form method="post" action="/__bugnet/continue">
+<input type="hidden" name="token" value="{{.Token}}">
+<input type="hidden" name="next" value="{{.Next}}">
+<button type="submit">Continue</button>
+</form>
+<p><a href="{{.Link}}">Report abuse</a></p>
+</main>
+</body>
+</html>

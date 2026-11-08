@@ -55,6 +55,8 @@ var (
 	TooManyTransfers = Code{status: 429, code: "too_many_transfers",
 		message:    "This sandbox runs as many transfers as it may. Try again when one ends.",
 		retryAfter: 10 * time.Second}
+	HeadersTooLarge = Code{status: 431, code: "headers_too_large",
+		message: "The request's headers are larger than this host takes."}
 )
 
 // allCodes lists every code, for tests
@@ -62,7 +64,7 @@ func allCodes() []Code {
 	return []Code{
 		TokenUnknown, TokenUsed, TokenExpired, SandboxEnded, TooLong, TrafficLimit, RateLimited,
 		InUse, SizeMismatch, OverCap, FileChanged, Range, ChecksumMismatch, NoSpace, Unavailable,
-		MethodNotAllowed, ContentRange, TooManyTransfers,
+		MethodNotAllowed, ContentRange, TooManyTransfers, HeadersTooLarge,
 	}
 }
 

@@ -126,7 +126,7 @@ func TestServerSettings(t *testing.T) {
 	hs := s.tlsServer()
 	eq(t, hs.ReadHeaderTimeout, 10*time.Second)
 	eq(t, hs.IdleTimeout, 2*time.Minute)
-	eq(t, hs.MaxHeaderBytes, 64<<10)
+	eq(t, hs.MaxHeaderBytes, 1<<20)
 	eq(t, hs.ReadTimeout, time.Duration(0))
 	eq(t, hs.WriteTimeout, time.Duration(0))
 	eq(t, hs.HTTP2.MaxConcurrentStreams, 128)
@@ -139,6 +139,37 @@ func TestServerSettings(t *testing.T) {
 	big := strings.Repeat("a", 70<<10)
 	eq(t, fetch(t, c, "GET", "https://"+transferHost+"/bnx_abc", "X-Big", big).StatusCode, 431)
 	eq(t, fetch(t, c, "GET", "https://"+transferHost+"/bnx_abc", "X-Small", "a").StatusCode, 200)
+}
+
+// Ruling E1 gives the preview names a full bugnet.sh cookie jar and transfer and hooks 64 KiB
+func TestHeaderLimitPerName(t *testing.T) {
+	s := New(testConfig(t), fakeDeps())
+	start(t, s)
+	jar := "jar=" + strings.Repeat("a", 600<<10)
+	for _, h2 := range []bool{false, true} {
+		c := client(t, s.addr("tls"), h2)
+		res := fetch(t, c, "GET", "https://"+previewHost+"/", "Cookie", jar)
+		eq(t, res.StatusCode, 200)
+		b, _ := io.ReadAll(res.Body)
+		eq(t, string(b), "preview")
+		res = fetch(t, c, "GET", "https://"+previewDomain+"/", "Cookie", jar)
+		eq(t, res.StatusCode, 200)
+	}
+	c := client(t, s.addr("tls"), false)
+	res := fetch(t, c, "GET", "https://"+transferHost+"/bnx_abc", "Cookie", jar)
+	eq(t, res.StatusCode, 431)
+	eq(t, res.Header.Get("Content-Type"), "application/json")
+	eq(t, res.Close, true)
+	b, _ := io.ReadAll(res.Body)
+	eq(t, strings.Contains(string(b), "headers_too_large"), true)
+	res = fetch(t, client(t, s.addr("tls"), true), "POST",
+		"https://"+hooksHost+"/hooks/e2b/secret", "Cookie", jar)
+	eq(t, res.StatusCode, 431)
+	eq(t, res.Header.Get("Content-Type"), "text/html; charset=utf-8")
+	// Past 1 MiB even a preview is refused by the server itself
+	res = fetch(t, c, "GET", "https://"+previewHost+"/", "Cookie",
+		"jar="+strings.Repeat("a", 1100<<10))
+	eq(t, res.StatusCode, 431)
 }
 
 func TestALPNPerName(t *testing.T) {
