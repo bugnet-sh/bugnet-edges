@@ -92,6 +92,22 @@ func (c *Cache) Has(k Key) bool {
 	return c.live(k) != nil
 }
 
+// HasTarget says whether a payload is cached for the request target under any body hash
+func (c *Cache) HasTarget(placement, method, host, target string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	pl := c.places[placement]
+	if pl == nil {
+		return false
+	}
+	for k := range pl.entries {
+		if k.Method == method && k.Host == host && k.Target == target && c.live(k) != nil {
+			return true
+		}
+	}
+	return false
+}
+
 // live is the key's payload before its KeepUntil, dropping it from then on, with c.mu held
 func (c *Cache) live(k Key) *entry {
 	pl := c.places[k.Placement]

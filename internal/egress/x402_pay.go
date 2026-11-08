@@ -121,7 +121,7 @@ func (h *hold) settle() bool {
 	return h.slow
 }
 
-// payable is XS 6.6 step 10 for a 402 on a request with a kept body, up to the signed payment
+// payable is XS 6.6 step 10 for a 402 on a request with a kept body, up to the paid retry
 func (q *sellerReq) payable(resp *http.Response, t x402.Target) {
 	rp := q.hold.rp
 	if err := rp.Wait(q.r.Context()); err != nil {
@@ -131,6 +131,18 @@ func (q *sellerReq) payable(resp *http.Response, t x402.Target) {
 	_, code, keep := q.judge(resp, x402.Payable, rp.Mark)
 	if code != "" {
 		q.refuse(code, x402.Facts{}, keep)
+		return
+	}
+	_ = resp.Body.Close()
+	wait, cancel := q.waitCtx()
+	defer cancel()
+	if !q.holdKey(wait) {
+		q.refuse(x402.CodeBufferBusy, x402.Facts{}, nil)
+		return
+	}
+	if pl := q.att.Attach(q.cfg.Enabled, q.listed); pl != nil {
+		q.ev.Ref = x402.NewRef()
+		q.paidRetry(*pl, t, true)
 		return
 	}
 	if !q.s.open.take(q.p.id, q.s.cfg.X402.MaxOpenSignedPerPlacement) {
@@ -153,7 +165,14 @@ func (q *sellerReq) payable(resp *http.Response, t x402.Target) {
 		q.refused(rf, keep)
 		return
 	}
-	q.signed(res.GetSigned(), keep)
+	sg := res.GetSigned()
+	pl := x402.Payload{
+		Value: []byte(sg.GetPaymentSignature()), PaymentID: sg.GetPaymentId(),
+		PaymentRef: sg.GetPaymentRef(), ServiceID: q.svc.ID, AmountMicros: sg.GetAmountMicros(),
+		LeftMicros: sg.GetAllowanceLeftMicros(), KeepUntil: sg.GetKeepUntil().AsTime(),
+	}
+	q.att.Store(pl)
+	q.paidRetry(pl, t, sg.GetResend())
 }
 
 // refused passes Payments' refusal on with XS 6.13's status
@@ -173,17 +192,4 @@ func (q *sellerReq) refused(rf *paymentsv1.Refused, keep http.Header) {
 		f.MaxMicros = &v
 	}
 	q.refuse(code, f, keep)
-}
-
-// signed hands a signed payment to the paid retry, which Task X32 sends
-func (q *sellerReq) signed(sg *paymentsv1.Signed, keep http.Header) {
-	q.s.signer.Report(&paymentsv1.ReportOutcomeRequest{
-		PaymentId: sg.GetPaymentId(), Ref: sg.GetPaymentRef(),
-		Hint: paymentsv1.SellerHint_SELLER_HINT_ABSENT,
-	})
-	f := q.facts()
-	left := sg.GetAllowanceLeftMicros()
-	f.LeftMicros = &left
-	q.ev.AllowanceLeftMicros = left
-	q.refuse(x402.CodePaymentsUnavailable, f, keep)
 }

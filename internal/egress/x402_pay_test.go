@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -38,7 +39,7 @@ func (e *payEnv) paySeller(w http.ResponseWriter, r *http.Request) {
 			Scheme: "exact", Network: "eip155:8453", Asset: "0xusdc", PayTo: "0xabc",
 			AmountMicros: 10000, AmountOK: true,
 		}}}, "https://api.example/post/base", nil)
-	case strings.HasPrefix(r.RequestURI, "/post/stall"):
+	case strings.HasPrefix(r.RequestURI, "/post/stall") && r.Header.Get("Payment-Signature") == "":
 		select {
 		case <-e.release:
 		case <-r.Context().Done():
@@ -76,6 +77,9 @@ func startPay(
 			t.Fatal(err)
 		}
 		d.Signer = sg
+		ctx, cancel := context.WithCancel(context.Background())
+		go sg.Run(ctx)
+		t.Cleanup(cancel)
 	})
 	e.h.sell = e.paySeller
 	return e
@@ -193,8 +197,8 @@ func TestEarly402BeforeTheBodyIsRead(t *testing.T) {
 			_ = pw.Close()
 		}()
 		resp := e.post(t, c, "/post/early", pr)
-		eq(t, resp.StatusCode, 503)
-		eq(t, resp.Header.Get(x402.HeaderError), "payments_unavailable")
+		eq(t, resp.StatusCode, 402)
+		eq(t, resp.Header.Get(x402.HeaderError), "payment_rejected")
 	}
 	sum := sha256.Sum256(body)
 	rs := e.pay.Reserves()
@@ -217,7 +221,7 @@ func TestPaidPathIgnoresTheQuery(t *testing.T) {
 	}
 	c := e.h.client(e.p.token)
 	eq(t, e.get(t, c, "/search?q=weather%20in%20Paris", nil).Header.Get(x402.HeaderError),
-		"payments_unavailable")
+		"payment_rejected")
 	e.get(t, c, "/search?q=rome", nil)
 	eq(t, e.get(t, c, "/search/other", nil).Header.Get(x402.HeaderError), "path_not_paid")
 	rs := e.pay.Reserves()
@@ -300,15 +304,15 @@ func TestTooManyOpenPaymentsIs429(t *testing.T) {
 	e.pay.Hold()
 	c := e.h.client(e.p.token)
 	var wg sync.WaitGroup
-	for range 2 {
+	for i := range 2 {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			e.post(t, c, "/post/x", nil)
+			e.post(t, c, "/post/x"+strconv.Itoa(i), nil)
 		}()
 	}
 	within(t, "two open payments", func() bool { return len(e.pay.Reserves()) == 2 })
-	resp := e.post(t, c, "/post/x", nil)
+	resp := e.post(t, c, "/post/x2", nil)
 	eq(t, resp.StatusCode, 429)
 	eq(t, resp.Header.Get(x402.HeaderError), "too_many_open_payments")
 	eq(t, resp.Header.Get("Retry-After"), "2")

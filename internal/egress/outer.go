@@ -93,6 +93,7 @@ type Server struct {
 	signer       *x402.Signer
 	buffers      *x402.Buffers
 	open         *openCount
+	cache        *x402.Cache
 	netRefused   *metrics.Counter
 
 	group   singleflight.Group
@@ -166,6 +167,7 @@ func New(cfg Config, d Deps) *Server {
 			cfg.X402.HostRateFloorPerPlacement, d.Now)
 	}
 	s.signer, s.open = d.Signer, newOpenCount()
+	s.cache = x402.NewCache(cfg.X402.MaxResendsPerPayment, s.now)
 	s.buffers = x402.NewBuffers(int64(cfg.X402.BufferBudget), int64(cfg.X402.BufferPerPlacement))
 	s.buffers.Export(d.Metrics)
 	s.netRefused = d.Metrics.Counter("egress_x402_network_unsupported_total",

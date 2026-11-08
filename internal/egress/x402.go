@@ -44,6 +44,14 @@ type sellerReq struct {
 
 	targetOK bool
 	hold     hold
+	// att is the paid attempt holding the cache key, finished on every way out
+	att *x402.Attempt
+	// resend says the paid retry carries a payload an earlier attempt signed
+	resend bool
+	// deadline ends the wait and the paid retry's wait for headers
+	deadline time.Time
+	// annotate adds Bugnet's paid headers to a refusal
+	annotate func(http.Header)
 	reached  atomic.Bool
 	answered bool
 	cut      atomic.Bool
@@ -60,6 +68,7 @@ func (s *Server) serveX402(
 		ev: &routerv1.X402Event{Host: st.host, Method: r.Method},
 	}
 	defer q.end()
+	defer q.finishAttempt()
 	if x402.IsUpgrade(r) {
 		q.refuse(x402.CodeUpgradeRefused, x402.Facts{}, nil)
 		return
@@ -78,6 +87,15 @@ func (s *Server) serveX402(
 	q.svc, q.ev.ServiceId = svc, svc.ID
 	x402.DropDummyKey(r.Header)
 	pay := x402.Payability(svc, t.Path, r.Method, r.Header)
+	if pay == x402.Payable && s.signer != nil {
+		if !q.takeHold() {
+			return
+		}
+		defer q.hold.release()
+		if q.tryResend(t) {
+			return
+		}
+	}
 	if s.counters.Over(p.id, st.host, cfg.Caps) {
 		q.refuse(x402.CodeUnpaidCap, x402.Facts{}, nil)
 		return
@@ -122,6 +140,9 @@ func (q *sellerReq) refuse(code x402.Code, f x402.Facts, seller http.Header) {
 	if f.RetryAfterSeconds != nil {
 		h.Set("Retry-After", strconv.Itoa(*f.RetryAfterSeconds))
 	}
+	if q.annotate != nil {
+		q.annotate(h)
+	}
 	q.ev.Status, q.ev.Reason = row.EventStatus, string(code)
 	q.w.WriteHeader(row.HTTPStatus)
 	_, _ = q.w.Write(body)
@@ -130,12 +151,6 @@ func (q *sellerReq) refuse(code x402.Code, f x402.Facts, seller http.Header) {
 // forward is XS 6.6 steps 8 to 10 for a request that passed the checks
 func (q *sellerReq) forward(t x402.Target, pay x402.Pay) {
 	r := q.r
-	if pay == x402.Payable && q.s.signer != nil {
-		if !q.takeHold() {
-			return
-		}
-		defer q.hold.release()
-	}
 	hdr := r.Header.Clone()
 	x402.StripHopByHop(hdr, true)
 	x402.StripBugnet(hdr)
@@ -311,7 +326,7 @@ func (q *sellerReq) end() {
 	if x402.CountsRequest(q.reached.Load(), ev.Status, x402.Code(ev.Reason)) {
 		q.s.counters.AddRequest(q.p.id, q.host)
 	}
-	q.s.hostRate.Ended(q.host, q.answered, ev.Status, false)
+	q.s.hostRate.Ended(q.host, q.answered, ev.Status, q.resend)
 	if q.s.events != nil {
 		x402.Shape(ev, q.targetOK)
 		q.s.events.Add(q.p.id, ev)
