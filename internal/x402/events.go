@@ -144,6 +144,8 @@ type Events struct {
 	full chan struct{}
 	// tick stands in for Run's flush ticker in tests
 	tick <-chan time.Time
+	// minuteAfter stands in for Run's minute timer in tests, firing once after d
+	minuteAfter func(d time.Duration) <-chan time.Time
 
 	mu          sync.Mutex
 	places      map[string]*placeEvents

@@ -148,6 +148,53 @@ func TestRunFlushesAtTheMinuteClose(t *testing.T) {
 	eq(t, counts, []uint32{1, 2})
 }
 
+// minuteTimers stands in for Run's minute timer, giving the test each one Run arms and its wait
+type minuteTimers struct {
+	armed chan chan time.Time
+	waits chan time.Duration
+}
+
+func (m *minuteTimers) after(d time.Duration) <-chan time.Time {
+	c := make(chan time.Time, 1)
+	m.waits <- d
+	m.armed <- c
+	return c
+}
+
+// next is the timer Run arms next, failing the test when Run arms none within a second
+func (m *minuteTimers) next(t *testing.T) chan time.Time {
+	t.Helper()
+	select {
+	case c := <-m.armed:
+		eq(t, <-m.waits, time.Minute)
+		return c
+	case <-time.After(time.Second):
+		t.Fatal("Run armed no minute timer within a second")
+		return nil
+	}
+}
+
+func TestRunFlushesAtEachMinuteClose(t *testing.T) {
+	e, s, clk, _ := newTestEvents(t)
+	timers := &minuteTimers{armed: make(chan chan time.Time, 4), waits: make(chan time.Duration, 4)}
+	e.minuteAfter = timers.after
+	runEvents(t, e)
+	for minute := range 2 {
+		timer := timers.next(t)
+		for i := range 3 {
+			e.Add("pl_a", eventCall(EventFree, "", eventAt(60*minute+5+i)))
+		}
+		s.none(t, 50*time.Millisecond)
+		clk.set(eventAt(60 * (minute + 1)))
+		timer <- time.Now()
+		var counts []uint32
+		for _, ev := range s.next(t).GetEvents() {
+			counts = append(counts, ev.GetCount())
+		}
+		eq(t, counts, []uint32{1, 2})
+	}
+}
+
 func TestBatchesHoldAtMost50(t *testing.T) {
 	e, s, clk, _ := newTestEvents(t)
 	for i := range 55 {

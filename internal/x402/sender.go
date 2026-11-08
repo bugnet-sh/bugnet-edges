@@ -65,8 +65,11 @@ func (e *Events) Run(ctx context.Context) {
 		defer t.Stop()
 		tick = t.C
 	}
-	minute := time.NewTimer(untilMinute(e.now()))
-	defer minute.Stop()
+	after := e.minuteAfter
+	if after == nil {
+		after = time.After
+	}
+	minute := after(untilMinute(e.now()))
 	for {
 		select {
 		case <-ctx.Done():
@@ -74,9 +77,9 @@ func (e *Events) Run(ctx context.Context) {
 			return
 		case <-tick:
 			e.flushAll(ctx)
-		case <-minute.C:
+		case <-minute:
 			e.flushAll(ctx)
-			minute.Reset(untilMinute(e.now()))
+			minute = after(untilMinute(e.now()))
 		case <-e.full:
 			e.flushRound(ctx, roundFull)
 		}
