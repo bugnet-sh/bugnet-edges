@@ -14,7 +14,7 @@ const chunkSize = 4 << 10
 
 // Replay is a request body kept for one paid retry
 type Replay struct {
-	// Kept is the body for the paid retry once Wait returns nil, else nil
+	// Kept is the paid retry's body, read only after Wait returns nil, nil after a mark or error
 	Kept []byte
 	// Sum is the SHA-256 of Kept, zero when Kept is nil
 	Sum [32]byte
