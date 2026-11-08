@@ -331,6 +331,7 @@ func (s *Server) ended(p *placement, key string) {
 	s.placesMu.Unlock()
 	p.view().set.zero()
 	s.counters.Drop(p.id)
+	s.cache.DropPlacement(p.id)
 	for _, f := range s.endedListeners {
 		f(p.id)
 	}
