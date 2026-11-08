@@ -137,7 +137,7 @@ Before the router is asked:
 | Another method | 405 `method`, with `Allow: GET, HEAD, PUT` |
 | `Content-Range` on `PUT` | 400 `content_range` |
 | Not `bnx_` and 43 base64url characters, or failed in the last 10 s | 404 `token_unknown` |
-| The address is marked and asked the router in the last second | 429 `rate_limited` |
+| The address is marked and asked the router within 1 s | 429 `rate_limited`, `Retry-After: 1` |
 
 - A token the router does not know counts against the address. Past `token_failures_per_minute`
   (20) the address is marked for 10 minutes, and its unknown tokens get 429 with
@@ -519,7 +519,8 @@ A `strangers.Guard` applies the token failure rule to one route.
   edge's settings. The next one marks the address for 10 minutes, counted from the last failure
   past the limit.
 - A marked address gets 429 for unknown tokens. At most one of its tokens a second goes to the
-  router, so a valid token from behind a shared NAT still works.
+  router, so a valid token from behind a shared NAT still works. The others get 429 with
+  `Retry-After: 1`.
 - A token that failed is remembered by its SHA-256 for 10 seconds and never asked again in that
   time.
 - An IPv4-mapped address counts as its IPv4 address.

@@ -13,6 +13,9 @@ const (
 	Unknown = 10 * time.Second
 )
 
+// AskEvery spaces the tokens a marked address may send the router
+const AskEvery = time.Second
+
 const (
 	// maxAddrs matches HAProxy's per-source tables, past it an arbitrary address gives way
 	maxAddrs   = 200_000
@@ -20,7 +23,6 @@ const (
 	sweepEvery = time.Minute
 	// fullSweepEvery spaces a full table's sweeps, between them one arbitrary entry gives way
 	fullSweepEvery = time.Second
-	askEvery       = time.Second
 )
 
 // Guard applies the token failure rule of one route, DP 4.5
@@ -86,7 +88,7 @@ func (g *Guard) MayAsk(ip netip.Addr) bool {
 	if e == nil || !now.Before(e.markedUntil) {
 		return true
 	}
-	if !e.askedAt.IsZero() && now.Sub(e.askedAt) < askEvery {
+	if !e.askedAt.IsZero() && now.Sub(e.askedAt) < AskEvery {
 		return false
 	}
 	e.askedAt = now

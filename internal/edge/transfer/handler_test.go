@@ -547,8 +547,11 @@ func TestUnknownTokensFromOneIP(t *testing.T) {
 	eq(t, valid.StatusCode, 200)
 	eq(t, string(valid.body), "ok")
 
-	// A marked address sends at most one token a second to the router
+	// A marked address sends at most one token a second to the router, the rest wait a second
 	opens := h.router.openCount()
+	r = h.get(t, h.downTok([]byte("ok")))
+	eq(t, r.StatusCode, 429)
+	eq(t, r.Header.Get("Retry-After"), "1")
 	eq(t, h.get(t, newToken()).StatusCode, 429)
 	eq(t, h.router.openCount(), opens)
 }

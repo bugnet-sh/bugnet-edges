@@ -135,7 +135,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if h.d.Guard.Marked(q.ip) && !h.d.Guard.MayAsk(q.ip) {
-		answer(q, pages.RateLimited.RetryAfter(strangers.Mark))
+		answer(q, pages.RateLimited.RetryAfter(strangers.AskEvery))
 		return
 	}
 	res, err := h.router.OpenTransfer(r.Context(), connect.NewRequest(
