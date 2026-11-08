@@ -217,9 +217,10 @@ key.
 | Anything else | 404 with no body |
 
 - **The bundle** is `page_dir`'s `index.html`, `headers.txt` and `assets/`, read once at start,
-  so a new page needs a restart. Every answer carries `headers.txt`'s headers, the CSP among
-  them. A bundle without a CSP, or one whose `headers.txt` sets a cookie or a content header,
-  stops the role at start. Text files go gzipped to a client that accepts it.
+  so a new page needs a restart. Every answer carries `headers.txt`'s headers. A bundle stops the
+  role at start unless they hold a CSP, `Cache-Control: no-store`, `Referrer-Policy: no-referrer`
+  and `X-Content-Type-Options: nosniff`, or if they set a cookie or a content header. Text files
+  go gzipped to a client that accepts it.
 - **The 200 body** is built around the router's bytes, never parsed:
   `{"state":"ended","record":<record_json>}`, `{"state":"running","snapshot":<live_json>}` or
   `{"state":"expired"}`.
@@ -229,13 +230,19 @@ key.
   10 s, so a wrong key never blocks the id's right key.
 - **Limits** (SP 7.4): `requests_per_minute` page calls per client address; past
   `key_failures_per_minute` wrong keys an address is marked 10 minutes, as for transfers; past
-  `id_failures_per_minute` wrong keys for one id, one call a second for it reaches the router.
-  An IPv6 client counts by its /64. A pair the router accepted skips the wrong key limits for 10
-  minutes, so a right key is never blocked.
+  `id_failures_per_minute` wrong keys for one id, the addresses that sent it a wrong key share
+  one router call a second for it, and every other address is never held by it. An IPv6 client
+  counts by its /64. A pair the router accepted skips the wrong key limits for 10 minutes, so a
+  right key is never blocked. A malformed key counts against its address only.
+- **Deadlines**: 10 s to read a page call's body (408 past it), and 10 s for a record or delete
+  call to the router (503 past it).
 - **Live streams**: `out`, `skip`, `exit` and `end` events, an `id:` line only with a cursor,
-  `: keepalive` every 15 s, a 30 s deadline on each write, and `live_per_record`, `live_per_ip`
-  and `live_max` streams. Each stream has its own HTTP/1.1 connection to the router. On a stop
-  signal the streams end without an `end` event and the page resumes them.
+  `: keepalive` every 15 s, a 30 s deadline on each write, and `live_per_ip` and `live_max`
+  streams. A stream counts toward its record's `live_per_record` only once the router took its
+  key, so a wrong key gets 404 whether the record is full or not. A NotFound for a key the
+  router took before (a placement not ready or ended) never counts as a wrong key. Each stream
+  has its own HTTP/1.1 connection to the router. On a stop signal the streams end without an
+  `end` event and the page resumes them.
 - **Headers** past `max_header_bytes` get a 431 page that says to clear the `bugnet.sh` cookies.
 - **Logs** name a call by its route, status and the first 8 hex characters of the id's
   SHA-256, never the body, the key or the link. Strangers' calls log at debug level.
