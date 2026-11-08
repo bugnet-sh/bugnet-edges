@@ -261,10 +261,12 @@ The router's refusals map to pages:
 - A browser page load with the query token that skips it gets the cookie on the answer, so the
   page's own requests carry it.
 - **Continue** posts `token` and `next` to `/__bugnet/continue`. It needs `Origin:
-  https://<this host>` and `Sec-Fetch-Site` of `same-origin` or none, else 403. A `next` that is
-  not a path on this host, starts `//`, or holds `\` or a control character gets 400. The token
-  must resolve. Then it answers 303 to `next`, rebuilt from its parsed path and query without
-  the token, and sets `__Host-bnp=<token>; Path=/; HttpOnly; Secure; SameSite=Lax`.
+  https://<this host>` with `Sec-Fetch-Site` of `same-origin` or none, or `Origin: null` with
+  `Sec-Fetch-Site: same-origin`, else 403. The interstitial's `Referrer-Policy: no-referrer`
+  makes browsers send `Origin: null` for its form, and a cross-site page that sends `null` too
+  has `Sec-Fetch-Site: cross-site`. A `next` that is not a path on this host, starts `//`, or
+  holds `\` or a control character gets 400. The token must resolve. Then it answers 303 to
+  `next`, rebuilt from its parsed path and query without the token, and sets `__Host-bnp=<token>; Path=/; HttpOnly; Secure; SameSite=Lax`.
 
 **Requests** (DP 8.2.5) go to the route's origin with the provider's `Host`. The edge removes
 each `bugnet_token=bnp_...` pair from the raw query by hand and keeps the rest byte for byte. It
@@ -307,6 +309,8 @@ dot segments collapsed.
 | `websockets` (32) open | 429, `Retry-After: 10` |
 | `boat_requests_per_minute` (5,000), edge-wide on Boat routes | Wait as for a slot |
 
+- Each lease starts its own limits, and a route the edge builds later with other figures, such
+  as after a top-up, changes them for the placement. Requests already admitted keep their slot.
 - A WebSocket takes a request token but no request slot, since it stays open as long as its page.
 - A route is Boat's when its host is `boat_host_suffix` (`on.boat.dev`) or ends in it. The Boat
   limiter allows a tenth of a minute's figure at once, so no minute passes 1.1 times it. 0 turns
