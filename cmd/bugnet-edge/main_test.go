@@ -287,7 +287,8 @@ func pageBundle(t *testing.T) string {
 		t.Fatal(err)
 	}
 	for name, body := range map[string]string{
-		"headers.txt":        "Content-Security-Policy: default-src 'none'\n",
+		"headers.txt": "Content-Security-Policy: default-src 'none'\nCache-Control: no-store\n" +
+			"Referrer-Policy: no-referrer\nX-Content-Type-Options: nosniff\n",
 		"index.html":         "<!doctype html><title>session</title>",
 		"assets/page-ABC.js": "1",
 	} {

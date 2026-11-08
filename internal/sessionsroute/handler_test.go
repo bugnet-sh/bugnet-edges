@@ -300,7 +300,14 @@ func TestLoadBundleRefusals(t *testing.T) {
 		remove  string
 		want    string
 	}{
-		"no csp":      {headers: "Cache-Control: no-store\n", want: "no Content-Security-Policy"},
+		"no csp": {headers: strings.Replace(testHeaders, "Content-Security-Policy", "X-CSP", 1),
+			want: "no Content-Security-Policy"},
+		"cacheable": {headers: strings.Replace(testHeaders, "no-store", "max-age=60", 1),
+			want: "Cache-Control must be no-store"},
+		"referrer": {headers: strings.Replace(testHeaders, "Referrer-Policy: no-referrer\n", "", 1),
+			want: "Referrer-Policy must be no-referrer"},
+		"sniffing": {headers: strings.Replace(testHeaders, "nosniff", "", 1),
+			want: "X-Content-Type-Options must be nosniff"},
 		"cookie":      {headers: testHeaders + "Set-Cookie: a=b\n", want: "Set-Cookie"},
 		"type":        {headers: testHeaders + "content-type: text/html\n", want: "content-type"},
 		"not header":  {headers: testHeaders + "nonsense\n", want: "is not a header"},
@@ -600,4 +607,18 @@ func TestRouterCallsHaveADeadline(t *testing.T) {
 	}
 	ids, offenders := x.h.ids.size()
 	eq(t, fmt.Sprint(ids, offenders), "0 0")
+}
+
+func TestTheSessionPageBuildLoads(t *testing.T) {
+	dist := "../../../bugnet-website/packages/session-page/dist"
+	if _, err := os.Stat(filepath.Join(dist, "headers.txt")); err != nil {
+		t.Skip("no session page build beside this checkout")
+	}
+	b, err := LoadBundle(dist)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(b.assets) == 0 || len(b.index.body) == 0 {
+		t.Fatal("the build loaded empty")
+	}
 }

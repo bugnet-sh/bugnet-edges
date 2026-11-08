@@ -92,10 +92,18 @@ func LoadBundle(dir string) (*Bundle, error) {
 	return b, nil
 }
 
-// parseHeaders reads one "Name: value" a line, refusing a bundle that sets no CSP or a cookie
+// required are the headers.txt lines every answer must carry, the record holding sandbox output
+var required = map[string]string{
+	"Cache-Control":          "no-store",
+	"Referrer-Policy":        "no-referrer",
+	"X-Content-Type-Options": "nosniff",
+}
+
+// parseHeaders reads one "Name: value" a line, refusing a bundle without the CSP and the
+// required headers, or one that sets a cookie or a content header
 func parseHeaders(text string) ([][2]string, error) {
 	var out [][2]string
-	csp := false
+	seen := map[string]string{}
 	for line := range strings.SplitSeq(text, "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
@@ -106,16 +114,21 @@ func parseHeaders(text string) ([][2]string, error) {
 		if !ok || !httpguts.ValidHeaderFieldName(name) || !httpguts.ValidHeaderFieldValue(value) {
 			return nil, fmt.Errorf("the line %q is not a header", line)
 		}
-		switch http.CanonicalHeaderKey(name) {
-		case "Content-Security-Policy":
-			csp = true
+		key := http.CanonicalHeaderKey(name)
+		switch key {
 		case "Set-Cookie", "Content-Type", "Content-Length", "Content-Encoding":
 			return nil, fmt.Errorf("%s is the role's to set", name)
 		}
+		seen[key] = value
 		out = append(out, [2]string{name, value})
 	}
-	if !csp {
+	if seen["Content-Security-Policy"] == "" {
 		return nil, errors.New("no Content-Security-Policy")
+	}
+	for name, want := range required {
+		if got, ok := seen[name]; !ok || !strings.EqualFold(got, want) {
+			return nil, fmt.Errorf("%s must be %s", name, want)
+		}
 	}
 	return out, nil
 }
