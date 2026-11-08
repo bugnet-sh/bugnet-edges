@@ -3,6 +3,8 @@ package egress
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -183,6 +185,7 @@ func (q *sellerReq) rejected(resp *http.Response, pl x402.Payload) {
 	q.s.signer.Report(q.report(pl, paymentsv1.SellerHint_SELLER_HINT_REJECTED,
 		http.StatusPaymentRequired))
 	q.att.Finish(x402.EndRejected)
+	q.logRejection(resp)
 	keep := http.Header{}
 	vs := resp.Header.Values("Payment-Required")
 	if len(vs) == 1 && len(vs[0]) <= int(q.s.cfg.X402.PaymentRequiredMax) {
@@ -287,4 +290,25 @@ func (q *sellerReq) commit(req *paymentsv1.ReportOutcomeRequest) {
 		q.ev.AllowanceLeftMicros = left
 	}
 	q.att.Finish(x402.EndClean)
+}
+
+// rejectionBodyLog bounds the seller body a rejection log line quotes
+const rejectionBodyLog = 300
+
+// logRejection logs the seller's own reason for a refused payment, the header's error and the
+// body's first bytes, which hold no payment value
+func (q *sellerReq) logRejection(resp *http.Response) {
+	reason := ""
+	raw, err := base64.StdEncoding.DecodeString(resp.Header.Get("Payment-Required"))
+	if err == nil {
+		var top struct {
+			Error string `json:"error"`
+		}
+		if json.Unmarshal(raw, &top) == nil {
+			reason = top.Error
+		}
+	}
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, rejectionBodyLog))
+	q.s.log.Warn("x402: the seller refused a payment", "host", q.host, "reason", reason,
+		"body", string(body))
 }
