@@ -4,7 +4,7 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/oynozan/bugnet-edges/internal/metrics"
+	"github.com/bugnet-sh/bugnet-edges/internal/metrics"
 )
 
 // Buffers is the process-wide body budget, split per placement

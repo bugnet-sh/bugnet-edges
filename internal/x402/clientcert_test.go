@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/oynozan/bugnet-edges/internal/x402/x402test"
-	paymentsv1 "github.com/oynozan/bugnet-proto/gen/go/bugnet/payments/v1"
+	"github.com/bugnet-sh/bugnet-edges/internal/x402/x402test"
+	paymentsv1 "github.com/bugnet-sh/bugnet-proto/gen/go/bugnet/payments/v1"
 )
 
 func TestSignerLoadsDevLayout(t *testing.T) {

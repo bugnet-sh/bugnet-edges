@@ -16,7 +16,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/oynozan/bugnet-edges/internal/x402"
+	"github.com/bugnet-sh/bugnet-edges/internal/x402"
 )
 
 const (

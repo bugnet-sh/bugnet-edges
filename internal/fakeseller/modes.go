@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/oynozan/bugnet-edges/internal/x402"
+	"github.com/bugnet-sh/bugnet-edges/internal/x402"
 )
 
 // The prices of XS 11.2 in micros, and $0.01 for a mode the table prices not

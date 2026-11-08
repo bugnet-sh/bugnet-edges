@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/oynozan/bugnet-edges/internal/x402"
+	"github.com/bugnet-sh/bugnet-edges/internal/x402"
 )
 
 // update rewrites the facilitator goldens from what the test posts

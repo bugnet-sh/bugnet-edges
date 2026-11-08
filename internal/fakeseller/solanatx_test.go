@@ -12,7 +12,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/oynozan/bugnet-edges/internal/x402"
+	"github.com/bugnet-sh/bugnet-edges/internal/x402"
 )
 
 // memoProgram is the memo program a seller payment calls, as Payments' signer builds it

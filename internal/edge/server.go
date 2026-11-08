@@ -16,13 +16,13 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/oynozan/bugnet-edges/internal/certmetric"
-	"github.com/oynozan/bugnet-edges/internal/hostname"
-	"github.com/oynozan/bugnet-edges/internal/metrics"
-	"github.com/oynozan/bugnet-edges/internal/pages"
-	"github.com/oynozan/bugnet-edges/internal/proxyproto"
-	"github.com/oynozan/bugnet-edges/internal/reuseport"
-	"github.com/oynozan/bugnet-edges/internal/tlsconf"
+	"github.com/bugnet-sh/bugnet-edges/internal/certmetric"
+	"github.com/bugnet-sh/bugnet-edges/internal/hostname"
+	"github.com/bugnet-sh/bugnet-edges/internal/metrics"
+	"github.com/bugnet-sh/bugnet-edges/internal/pages"
+	"github.com/bugnet-sh/bugnet-edges/internal/proxyproto"
+	"github.com/bugnet-sh/bugnet-edges/internal/reuseport"
+	"github.com/bugnet-sh/bugnet-edges/internal/tlsconf"
 )
 
 const (

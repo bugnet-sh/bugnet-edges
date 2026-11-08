@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/oynozan/bugnet-edges/internal/strangers"
+	"github.com/bugnet-sh/bugnet-edges/internal/strangers"
 )
 
 const (

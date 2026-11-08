@@ -7,13 +7,13 @@ import (
 	"sync"
 	"time"
 
-	routerv1 "github.com/oynozan/bugnet-proto/gen/go/bugnet/router/v1"
-	"github.com/oynozan/bugnet-proto/gen/go/bugnet/router/v1/routerv1connect"
+	routerv1 "github.com/bugnet-sh/bugnet-proto/gen/go/bugnet/router/v1"
+	"github.com/bugnet-sh/bugnet-proto/gen/go/bugnet/router/v1/routerv1connect"
 
-	"github.com/oynozan/bugnet-edges/internal/events"
-	"github.com/oynozan/bugnet-edges/internal/lease"
-	"github.com/oynozan/bugnet-edges/internal/pace"
-	"github.com/oynozan/bugnet-edges/internal/usage"
+	"github.com/bugnet-sh/bugnet-edges/internal/events"
+	"github.com/bugnet-sh/bugnet-edges/internal/lease"
+	"github.com/bugnet-sh/bugnet-edges/internal/pace"
+	"github.com/bugnet-sh/bugnet-edges/internal/usage"
 )
 
 const (

@@ -8,8 +8,8 @@ import (
 	"time"
 
 	"connectrpc.com/connect"
-	routerv1 "github.com/oynozan/bugnet-proto/gen/go/bugnet/router/v1"
-	"github.com/oynozan/bugnet-proto/gen/go/bugnet/router/v1/routerv1connect"
+	routerv1 "github.com/bugnet-sh/bugnet-proto/gen/go/bugnet/router/v1"
+	"github.com/bugnet-sh/bugnet-proto/gen/go/bugnet/router/v1/routerv1connect"
 )
 
 // The event sender's log lines, written when the router takes a row and when a row is dropped

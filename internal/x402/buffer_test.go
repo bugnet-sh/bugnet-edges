@@ -6,7 +6,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/oynozan/bugnet-edges/internal/metrics"
+	"github.com/bugnet-sh/bugnet-edges/internal/metrics"
 )
 
 const (

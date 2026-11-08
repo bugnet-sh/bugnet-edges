@@ -16,8 +16,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/oynozan/bugnet-edges/internal/hostname"
-	"github.com/oynozan/bugnet-edges/internal/settings"
+	"github.com/bugnet-sh/bugnet-edges/internal/hostname"
+	"github.com/bugnet-sh/bugnet-edges/internal/settings"
 )
 
 // Config is bugnet-edge's settings file (DP 8.8) with the ACME switch, and its two secrets

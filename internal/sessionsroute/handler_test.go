@@ -19,7 +19,7 @@ import (
 	"time"
 
 	"connectrpc.com/connect"
-	routerv1 "github.com/oynozan/bugnet-proto/gen/go/bugnet/router/v1"
+	routerv1 "github.com/bugnet-sh/bugnet-proto/gen/go/bugnet/router/v1"
 )
 
 // checkBundleHeaders fails unless h carries every line of headers.txt exactly

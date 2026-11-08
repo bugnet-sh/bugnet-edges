@@ -24,11 +24,11 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/oynozan/bugnet-edges/internal/fakeseller"
-	"github.com/oynozan/bugnet-edges/internal/hostname"
-	"github.com/oynozan/bugnet-edges/internal/settings"
-	"github.com/oynozan/bugnet-edges/internal/tlsconf"
-	"github.com/oynozan/bugnet-edges/internal/x402"
+	"github.com/bugnet-sh/bugnet-edges/internal/fakeseller"
+	"github.com/bugnet-sh/bugnet-edges/internal/hostname"
+	"github.com/bugnet-sh/bugnet-edges/internal/settings"
+	"github.com/bugnet-sh/bugnet-edges/internal/tlsconf"
+	"github.com/bugnet-sh/bugnet-edges/internal/x402"
 )
 
 func main() {

@@ -1,13 +1,13 @@
-module github.com/oynozan/bugnet-edges
+module github.com/bugnet-sh/bugnet-edges
 
 go 1.27
 
-replace github.com/oynozan/bugnet-proto => ../bugnet-proto
+replace github.com/bugnet-sh/bugnet-proto => ../bugnet-proto
 
 require (
 	connectrpc.com/connect v1.21.1
 	github.com/go-acme/lego/v4 v4.35.2
-	github.com/oynozan/bugnet-proto v0.1.0
+	github.com/bugnet-sh/bugnet-proto v0.1.0
 	github.com/pelletier/go-toml/v2 v2.2.4
 	github.com/pires/go-proxyproto v0.16.0
 	golang.org/x/crypto v0.58.0

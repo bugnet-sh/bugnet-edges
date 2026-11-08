@@ -11,8 +11,8 @@ import (
 	"testing"
 
 	"connectrpc.com/connect"
-	routerv1 "github.com/oynozan/bugnet-proto/gen/go/bugnet/router/v1"
-	"github.com/oynozan/bugnet-proto/gen/go/bugnet/router/v1/routerv1connect"
+	routerv1 "github.com/bugnet-sh/bugnet-proto/gen/go/bugnet/router/v1"
+	"github.com/bugnet-sh/bugnet-proto/gen/go/bugnet/router/v1/routerv1connect"
 )
 
 const token = "edge-token-0123456789abcdef0123456789"

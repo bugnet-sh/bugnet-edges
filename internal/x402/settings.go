@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/oynozan/bugnet-edges/internal/hostname"
-	"github.com/oynozan/bugnet-edges/internal/settings"
+	"github.com/bugnet-sh/bugnet-edges/internal/hostname"
+	"github.com/bugnet-sh/bugnet-edges/internal/settings"
 )
 
 // Settings is egress's [x402] table, XS 6.16

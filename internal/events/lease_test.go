@@ -7,8 +7,8 @@ import (
 	"testing/synctest"
 	"time"
 
-	"github.com/oynozan/bugnet-edges/internal/lease"
-	routerv1 "github.com/oynozan/bugnet-proto/gen/go/bugnet/router/v1"
+	"github.com/bugnet-sh/bugnet-edges/internal/lease"
+	routerv1 "github.com/bugnet-sh/bugnet-proto/gen/go/bugnet/router/v1"
 )
 
 // leaseChecks counts lease checks and answers every placement as still live

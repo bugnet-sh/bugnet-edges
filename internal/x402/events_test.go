@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	routerv1 "github.com/oynozan/bugnet-proto/gen/go/bugnet/router/v1"
+	routerv1 "github.com/bugnet-sh/bugnet-proto/gen/go/bugnet/router/v1"
 )
 
 func TestRefShape(t *testing.T) {

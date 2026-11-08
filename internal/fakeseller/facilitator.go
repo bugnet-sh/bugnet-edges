@@ -12,7 +12,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/oynozan/bugnet-edges/internal/x402"
+	"github.com/bugnet-sh/bugnet-edges/internal/x402"
 )
 
 // reasonShape is the errorReason text a facilitator's answer passes on to the payer

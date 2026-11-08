@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/oynozan/bugnet-edges/internal/settings"
+	"github.com/bugnet-sh/bugnet-edges/internal/settings"
 )
 
 // table is XS 6.13's rows by code, HTTP status and event status, in its order

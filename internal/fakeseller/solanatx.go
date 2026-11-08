@@ -3,7 +3,7 @@ package fakeseller
 import (
 	"crypto/ed25519"
 
-	"github.com/oynozan/bugnet-edges/internal/x402"
+	"github.com/bugnet-sh/bugnet-edges/internal/x402"
 )
 
 const (

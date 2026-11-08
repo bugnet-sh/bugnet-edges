@@ -18,9 +18,9 @@ import (
 	"time"
 
 	"connectrpc.com/connect"
-	"github.com/oynozan/bugnet-edges/internal/settings"
-	"github.com/oynozan/bugnet-edges/internal/x402/x402test"
-	paymentsv1 "github.com/oynozan/bugnet-proto/gen/go/bugnet/payments/v1"
+	"github.com/bugnet-sh/bugnet-edges/internal/settings"
+	"github.com/bugnet-sh/bugnet-edges/internal/x402/x402test"
+	paymentsv1 "github.com/bugnet-sh/bugnet-proto/gen/go/bugnet/payments/v1"
 	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/protobuf/proto"
 )

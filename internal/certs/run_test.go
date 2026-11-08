@@ -15,9 +15,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/oynozan/bugnet-edges/internal/certmetric"
-	"github.com/oynozan/bugnet-edges/internal/metrics"
-	"github.com/oynozan/bugnet-edges/internal/tlsconf"
+	"github.com/bugnet-sh/bugnet-edges/internal/certmetric"
+	"github.com/bugnet-sh/bugnet-edges/internal/metrics"
+	"github.com/bugnet-sh/bugnet-edges/internal/tlsconf"
 )
 
 const wildcard = "*.preview.example.test"

@@ -10,7 +10,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/oynozan/bugnet-edges/internal/x402"
+	"github.com/bugnet-sh/bugnet-edges/internal/x402"
 )
 
 // fakeTx starts the transaction of x402test.PaymentSignature, fake- and the request's ref

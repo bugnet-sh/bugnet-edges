@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/oynozan/bugnet-edges/internal/x402"
+	"github.com/bugnet-sh/bugnet-edges/internal/x402"
 )
 
 // rpcCall is one JSON-RPC request a chain received

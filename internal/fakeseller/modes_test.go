@@ -8,7 +8,7 @@ import (
 	"testing"
 	"unicode/utf8"
 
-	"github.com/oynozan/bugnet-edges/internal/x402"
+	"github.com/bugnet-sh/bugnet-edges/internal/x402"
 )
 
 // exact checks an entry is exact Solana USDC asking amount of to, or of payTo when none is given

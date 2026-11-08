@@ -11,7 +11,7 @@ import (
 
 	pp "github.com/pires/go-proxyproto"
 
-	"github.com/oynozan/bugnet-edges/internal/reuseport"
+	"github.com/bugnet-sh/bugnet-edges/internal/reuseport"
 )
 
 var (

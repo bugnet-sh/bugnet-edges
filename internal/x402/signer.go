@@ -11,8 +11,8 @@ import (
 	"time"
 
 	"connectrpc.com/connect"
-	paymentsv1 "github.com/oynozan/bugnet-proto/gen/go/bugnet/payments/v1"
-	"github.com/oynozan/bugnet-proto/gen/go/bugnet/payments/v1/paymentsv1connect"
+	paymentsv1 "github.com/bugnet-sh/bugnet-proto/gen/go/bugnet/payments/v1"
+	"github.com/bugnet-sh/bugnet-proto/gen/go/bugnet/payments/v1/paymentsv1connect"
 	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/protobuf/proto"
 )

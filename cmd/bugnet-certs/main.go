@@ -13,7 +13,7 @@ import (
 
 	legolog "github.com/go-acme/lego/v4/log"
 
-	"github.com/oynozan/bugnet-edges/internal/certs"
+	"github.com/bugnet-sh/bugnet-edges/internal/certs"
 )
 
 func main() {

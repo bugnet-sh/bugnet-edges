@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/oynozan/bugnet-edges/internal/settings"
+	"github.com/bugnet-sh/bugnet-edges/internal/settings"
 )
 
 // file is egress's settings file as far as its [x402] table

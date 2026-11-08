@@ -21,15 +21,15 @@ import (
 	"unicode/utf8"
 
 	"connectrpc.com/connect"
-	routerv1 "github.com/oynozan/bugnet-proto/gen/go/bugnet/router/v1"
-	"github.com/oynozan/bugnet-proto/gen/go/bugnet/router/v1/routerv1connect"
+	routerv1 "github.com/bugnet-sh/bugnet-proto/gen/go/bugnet/router/v1"
+	"github.com/bugnet-sh/bugnet-proto/gen/go/bugnet/router/v1/routerv1connect"
 	"google.golang.org/genproto/googleapis/rpc/errdetails"
 
-	"github.com/oynozan/bugnet-edges/internal/lease"
-	"github.com/oynozan/bugnet-edges/internal/pace"
-	"github.com/oynozan/bugnet-edges/internal/pages"
-	"github.com/oynozan/bugnet-edges/internal/strangers"
-	"github.com/oynozan/bugnet-edges/internal/traffic"
+	"github.com/bugnet-sh/bugnet-edges/internal/lease"
+	"github.com/bugnet-sh/bugnet-edges/internal/pace"
+	"github.com/bugnet-sh/bugnet-edges/internal/pages"
+	"github.com/bugnet-sh/bugnet-edges/internal/strangers"
+	"github.com/bugnet-sh/bugnet-edges/internal/traffic"
 )
 
 const (

@@ -19,8 +19,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/oynozan/bugnet-edges/internal/x402"
-	"github.com/oynozan/bugnet-edges/internal/x402/x402test"
+	"github.com/bugnet-sh/bugnet-edges/internal/x402"
+	"github.com/bugnet-sh/bugnet-edges/internal/x402/x402test"
 )
 
 func TestOkSettlesOnce(t *testing.T) {

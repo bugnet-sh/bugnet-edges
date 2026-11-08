@@ -12,16 +12,16 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/oynozan/bugnet-proto/gen/go/bugnet/router/v1/routerv1connect"
+	"github.com/bugnet-sh/bugnet-proto/gen/go/bugnet/router/v1/routerv1connect"
 
-	"github.com/oynozan/bugnet-edges/internal/edge"
-	"github.com/oynozan/bugnet-edges/internal/edge/transfer"
-	"github.com/oynozan/bugnet-edges/internal/metrics"
-	"github.com/oynozan/bugnet-edges/internal/pages"
-	"github.com/oynozan/bugnet-edges/internal/routerclient"
-	"github.com/oynozan/bugnet-edges/internal/sessionsroute"
-	"github.com/oynozan/bugnet-edges/internal/strangers"
-	"github.com/oynozan/bugnet-edges/internal/traffic"
+	"github.com/bugnet-sh/bugnet-edges/internal/edge"
+	"github.com/bugnet-sh/bugnet-edges/internal/edge/transfer"
+	"github.com/bugnet-sh/bugnet-edges/internal/metrics"
+	"github.com/bugnet-sh/bugnet-edges/internal/pages"
+	"github.com/bugnet-sh/bugnet-edges/internal/routerclient"
+	"github.com/bugnet-sh/bugnet-edges/internal/sessionsroute"
+	"github.com/bugnet-sh/bugnet-edges/internal/strangers"
+	"github.com/bugnet-sh/bugnet-edges/internal/traffic"
 )
 
 func main() {

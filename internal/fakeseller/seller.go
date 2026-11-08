@@ -19,7 +19,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/oynozan/bugnet-edges/internal/x402"
+	"github.com/bugnet-sh/bugnet-edges/internal/x402"
 )
 
 // Payment is the transfer a payer sent, as the seller decoded it

@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/oynozan/bugnet-edges/internal/x402/x402test"
+	"github.com/bugnet-sh/bugnet-edges/internal/x402/x402test"
 )
 
 // testList reads one list of the test API with the token tok

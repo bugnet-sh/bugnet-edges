@@ -12,8 +12,8 @@ import (
 
 	"golang.org/x/net/http2"
 
-	"github.com/oynozan/bugnet-edges/internal/metrics"
-	"github.com/oynozan/bugnet-edges/internal/settings"
+	"github.com/bugnet-sh/bugnet-edges/internal/metrics"
+	"github.com/bugnet-sh/bugnet-edges/internal/settings"
 )
 
 const hsts = "max-age=31536000"

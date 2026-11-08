@@ -7,8 +7,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/oynozan/bugnet-edges/internal/metrics"
-	"github.com/oynozan/bugnet-edges/internal/tlsconf"
+	"github.com/bugnet-sh/bugnet-edges/internal/metrics"
+	"github.com/bugnet-sh/bugnet-edges/internal/tlsconf"
 )
 
 // Export registers edge_cert_days_left and edge_cert_issued for c and asks for each exact name once

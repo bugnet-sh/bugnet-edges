@@ -24,7 +24,7 @@ import (
 
 	pp "github.com/pires/go-proxyproto"
 
-	"github.com/oynozan/bugnet-edges/internal/settings"
+	"github.com/bugnet-sh/bugnet-edges/internal/settings"
 )
 
 const (

@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/oynozan/bugnet-proto/vectors"
+	"github.com/bugnet-sh/bugnet-proto/vectors"
 )
 
 // pathVectors is paths.json from bugnet-proto, the cases every implementation shares

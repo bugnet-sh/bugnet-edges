@@ -20,7 +20,7 @@ import (
 	"time"
 	"weak"
 
-	"github.com/oynozan/bugnet-edges/internal/metrics"
+	"github.com/bugnet-sh/bugnet-edges/internal/metrics"
 )
 
 var (

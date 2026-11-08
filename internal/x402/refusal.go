@@ -5,7 +5,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/oynozan/bugnet-edges/internal/settings"
+	"github.com/bugnet-sh/bugnet-edges/internal/settings"
 )
 
 // Code is a refusal code of XS 6.13

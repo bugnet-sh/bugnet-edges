@@ -24,12 +24,12 @@ import (
 	"time"
 
 	"connectrpc.com/connect"
-	"github.com/oynozan/bugnet-proto/gen/go/bugnet/router/v1/routerv1connect"
+	"github.com/bugnet-sh/bugnet-proto/gen/go/bugnet/router/v1/routerv1connect"
 
-	"github.com/oynozan/bugnet-edges/internal/lease"
-	"github.com/oynozan/bugnet-edges/internal/routerclient"
-	"github.com/oynozan/bugnet-edges/internal/strangers"
-	"github.com/oynozan/bugnet-edges/internal/traffic"
+	"github.com/bugnet-sh/bugnet-edges/internal/lease"
+	"github.com/bugnet-sh/bugnet-edges/internal/routerclient"
+	"github.com/bugnet-sh/bugnet-edges/internal/strangers"
+	"github.com/bugnet-sh/bugnet-edges/internal/traffic"
 )
 
 const (
