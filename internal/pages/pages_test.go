@@ -108,6 +108,7 @@ func TestJSONErrors(t *testing.T) {
 		{TokenUsed, 410, "token_used", ""},
 		{TokenExpired, 410, "token_expired", ""},
 		{SandboxEnded, 410, "sandbox_ended", ""},
+		{TooLong, 408, "too_long", ""},
 		{TrafficLimit, 429, "budget_spent", ""},
 		{RateLimited, 429, "rate_limited", "60"},
 		{RateLimited.RetryAfter(1500 * time.Millisecond), 429, "rate_limited", "2"},

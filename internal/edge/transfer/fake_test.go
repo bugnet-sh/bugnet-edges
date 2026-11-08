@@ -53,9 +53,11 @@ type file struct {
 	// stall makes an upload's stream stop reading after its first bytes until closed
 	stall chan struct{}
 	got   int64 // bytes an upload's stream read
-	// hardStop puts the URL's hard stop that far from its open, 30 minutes when 0
+	// hardStop puts the URL's max_duration that far from its open, 30 minutes when 0
 	hardStop time.Duration
-	writes   int // upload streams that named this file and ended
+	// streamErr, when set, answers the file's ReadTransfer and WriteTransfer streams
+	streamErr error
+	writes    int // upload streams that named this file and ended
 }
 
 // fakeRouter is an EdgeService that serves transfers from memory and records every call
@@ -73,6 +75,8 @@ type fakeRouter struct {
 	usage    map[string][2]uint64
 	// openErr, when set, answers every OpenTransfer
 	openErr error
+	// deadline is the placement's deadline, an hour from each call when zero
+	deadline time.Time
 }
 
 func newFakeRouter() *fakeRouter {
@@ -170,11 +174,12 @@ func (f *fakeRouter) OpenTransfer(
 		x.claims++
 	}
 	now := time.Now()
-	stop := cmp.Or(x.hardStop, 30*time.Minute)
+	expires := f.deadlineLocked()
+	stop := now.Add(cmp.Or(x.hardStop, 30*time.Minute))
 	out := &routerv1.OpenTransferResponse{
 		TransferId: x.id, Lease: "lease-" + x.id[:4], PlacementId: "p1", FileName: x.name,
-		Size: x.size, Etag: x.etag, HardStop: timestamppb.New(now.Add(stop)),
-		ExpiresAt: timestamppb.New(now.Add(time.Hour)),
+		Size: x.size, Etag: x.etag, HardStop: timestamppb.New(minTime(expires, stop)),
+		ExpiresAt: timestamppb.New(expires),
 		Budget:    &routerv1.EdgeBudget{BytesRemaining: gib},
 	}
 	if x.dir == download {
@@ -193,6 +198,9 @@ func (f *fakeRouter) ReadTransfer(
 	f.mu.Unlock()
 	if x == nil {
 		return refusal(connect.CodeNotFound, "TOKEN_UNKNOWN")
+	}
+	if x.streamErr != nil {
+		return x.streamErr
 	}
 	off, n := req.Msg.GetOffset(), req.Msg.GetLength()
 	if off > x.size || n > x.size-off {
@@ -258,6 +266,9 @@ func (f *fakeRouter) WriteTransfer(
 		x.writes++
 		f.mu.Unlock()
 	}()
+	if x.streamErr != nil {
+		return nil, x.streamErr
+	}
 	var got bytes.Buffer
 	stalled := false
 	take := func(b []byte) {
@@ -316,10 +327,13 @@ func (f *fakeRouter) ReportEdgeUsage(
 func (f *fakeRouter) CheckEdgeLeases(
 	_ context.Context, req *connect.Request[routerv1.CheckEdgeLeasesRequest],
 ) (*connect.Response[routerv1.CheckEdgeLeasesResponse], error) {
+	f.mu.Lock()
+	deadline := f.deadlineLocked()
+	f.mu.Unlock()
 	out := &routerv1.CheckEdgeLeasesResponse{Leases: map[string]*routerv1.EdgeLease{}}
 	for _, id := range req.Msg.GetPlacementIds() {
 		out.Leases[id] = &routerv1.EdgeLease{
-			Deadline: timestamppb.New(time.Now().Add(time.Hour)), BytesRemaining: gib,
+			Deadline: timestamppb.New(deadline), BytesRemaining: gib,
 		}
 	}
 	return connect.NewResponse(out), nil
@@ -331,6 +345,27 @@ func (f *fakeRouter) WatchEdgeEvents(
 ) error {
 	<-ctx.Done()
 	return ctx.Err()
+}
+
+func (f *fakeRouter) deadlineLocked() time.Time {
+	if f.deadline.IsZero() {
+		return time.Now().Add(time.Hour)
+	}
+	return f.deadline
+}
+
+// setDeadline puts the placement's deadline at t
+func (f *fakeRouter) setDeadline(t time.Time) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.deadline = t
+}
+
+func minTime(a, b time.Time) time.Time {
+	if b.Before(a) {
+		return b
+	}
+	return a
 }
 
 func (f *fakeRouter) openCount() int {

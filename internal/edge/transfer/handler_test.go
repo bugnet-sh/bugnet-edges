@@ -222,6 +222,35 @@ func (h *harness) do(t *testing.T, method, path, body string, opts ...opt) reply
 	return reply{Response: res, body: got, err: err}
 }
 
+// doBody sends one request whose body of length n comes from body as it is read
+func (h *harness) doBody(t *testing.T, method, path string, body io.Reader, n int) reply {
+	t.Helper()
+	failed := reply{Response: &http.Response{Header: http.Header{}}}
+	c, err := net.Dial("tcp", h.addr)
+	if err != nil {
+		t.Error(err)
+		return failed
+	}
+	defer func() { _ = c.Close() }()
+	_, err = fmt.Fprintf(c, "%s %s HTTP/1.1\r\nHost: x\r\nContent-Length: %d\r\n\r\n",
+		method, path, n)
+	if err == nil {
+		_, err = io.Copy(c, body)
+	}
+	if err != nil {
+		t.Error(err)
+		return failed
+	}
+	_ = c.SetReadDeadline(time.Now().Add(10 * time.Second))
+	res, err := http.ReadResponse(bufio.NewReader(c), &http.Request{Method: method})
+	if err != nil {
+		t.Errorf("%s %s: %v", method, path, err)
+		return failed
+	}
+	got, err := io.ReadAll(res.Body)
+	return reply{Response: res, body: got, err: err}
+}
+
 func (h *harness) get(t *testing.T, tok string, kv ...string) reply {
 	t.Helper()
 	var opts []opt
@@ -806,54 +835,167 @@ func TestLeaseEndCutsADownloadWhoseClientStoppedReading(t *testing.T) {
 }
 
 func TestHardStopCutsRunningTransfers(t *testing.T) {
-	h := newHarness(t)
 	const ahead = 2 * time.Second
-	size := 8 * mib
-	up := h.router.add(&file{dir: upload, size: 10, name: "in.bin", hardStop: ahead})
-	down := h.router.add(&file{dir: download, data: make([]byte, size), holdLast: true,
-		hardStop: ahead})
-	start := time.Now()
-	got := make(chan reply, 1)
-	go func() { got <- h.do(t, "PUT", "/"+up, "12345", contentLength(10)) }()
-	c := h.stalledGet(t, down)
-	h.waitStalled(t)
-	waitFor(t, "the router reading", func() bool { return h.router.bytesReceived() > 0 })
-	eq(t, h.finishedOf("GET"), 0)
+	for _, tc := range []struct {
+		bound    string
+		deadline bool // the placement deadline comes first, else max_duration does
+		status   int
+		code     string
+	}{
+		{"max_duration", false, 408, "too_long"},
+		{"deadline", true, 410, "sandbox_ended"},
+	} {
+		t.Run(tc.bound, func(t *testing.T) {
+			h := newHarness(t)
+			size := 8 * mib
+			up := &file{dir: upload, size: 10, name: "in.bin"}
+			down := &file{dir: download, data: make([]byte, size), holdLast: true}
+			start := time.Now()
+			if tc.deadline {
+				h.router.setDeadline(start.Add(ahead))
+			} else {
+				up.hardStop, down.hardStop = ahead, ahead
+			}
+			upTok, downTok := h.router.add(up), h.router.add(down)
+			got := make(chan reply, 1)
+			go func() { got <- h.do(t, "PUT", "/"+upTok, "12345", contentLength(10)) }()
+			c := h.stalledGet(t, downTok)
+			h.waitStalled(t)
+			waitFor(t, "the router reading", func() bool { return h.router.bytesReceived() > 0 })
+			eq(t, h.finishedOf("GET"), 0)
 
-	r := <-got
-	if took := time.Since(start); took < ahead*9/10 || took > ahead+shortWait {
-		t.Fatalf("the upload was cut after %s, its hard stop was %s ahead", took, ahead)
+			r := <-got
+			if took := time.Since(start); took < ahead*9/10 || took > ahead+shortWait {
+				t.Fatalf("the upload was cut after %s, its hard stop was %s ahead", took, ahead)
+			}
+			eq(t, r.StatusCode, tc.status)
+			eq(t, r.code(), tc.code)
+			waitFor(t, "the upload aborted", func() bool { return h.router.abortedCount() == 1 })
+			used, written, _ := h.router.used(upTok)
+			eq(t, used, false)
+			eq(t, len(written), 0)
+
+			waitFor(t, "the download cut", func() bool { return h.finishedOf("GET") == 1 })
+			waitFor(t, "the router's stream cut", func() bool {
+				_, cut := h.router.reading()
+				return cut == 1
+			})
+			cutShort(t, c, size)
+		})
 	}
-	eq(t, r.StatusCode, 410)
-	eq(t, r.code(), "sandbox_ended")
-	waitFor(t, "the upload aborted", func() bool { return h.router.abortedCount() == 1 })
-	used, written, _ := h.router.used(up)
-	eq(t, used, false)
-	eq(t, len(written), 0)
-
-	waitFor(t, "the download cut", func() bool { return h.finishedOf("GET") == 1 })
-	waitFor(t, "the router's stream cut", func() bool {
-		_, cut := h.router.reading()
-		return cut == 1
-	})
-	cutShort(t, c, size)
 }
 
-func TestAPassedHardStopIsSandboxEnded(t *testing.T) {
+func TestAnExtensionMovesTheHardStopOfRunningTransfers(t *testing.T) {
+	h := newHarness(t)
+	const ahead = 2 * time.Second
+	start := time.Now()
+	h.router.setDeadline(start.Add(ahead))
+	size := 8 * mib
+	data := make([]byte, size)
+	for i := range data {
+		data[i] = byte(i)
+	}
+	upTok := h.upTok(10)
+	got := make(chan reply, 1)
+	body, rest := io.Pipe()
+	go func() {
+		got <- h.doBody(t, "PUT", "/"+upTok, io.MultiReader(strings.NewReader("12345"), body),
+			10)
+	}()
+	c := h.stalledGet(t, h.downTok(data))
+	waitFor(t, "both transfers open", func() bool { return h.router.openCount() == 2 })
+	waitFor(t, "the router reading", func() bool { return h.router.bytesReceived() == 5 })
+	h.waitStalled(t)
+
+	// The extension moves the router's deadline, and its DeadlineMoved reaches the lease this way
+	h.router.setDeadline(start.Add(time.Hour))
+	h.tr.Leases.Move("p1", lease.State{Deadline: start.Add(time.Hour), Remaining: gib})
+	time.Sleep(time.Until(start.Add(ahead + time.Second)))
+	eq(t, h.finishedOf("PUT"), 0)
+	eq(t, h.finishedOf("GET"), 0)
+
+	if _, err := io.WriteString(rest, "67890"); err != nil {
+		t.Fatal(err)
+	}
+	_ = rest.Close()
+	r := <-got
+	eq(t, r.StatusCode, 200)
+	used, written, _ := h.router.used(upTok)
+	eq(t, used, true)
+	eq(t, string(written), "1234567890")
+
+	_ = c.SetReadDeadline(time.Now().Add(shortWait))
+	res, err := http.ReadResponse(bufio.NewReader(c), &http.Request{Method: "GET"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	all, err := io.ReadAll(res.Body)
+	if err != nil {
+		t.Fatalf("the download ended after %d bytes: %v", len(all), err)
+	}
+	eq(t, res.StatusCode, 200)
+	eq(t, bytes.Equal(all, data), true)
+}
+
+func TestAPassedHardStopEndsTheTransfer(t *testing.T) {
+	past := -time.Second
 	for _, tc := range []struct {
-		method string
-		x      *file
-		body   string
+		method   string
+		x        *file
+		body     string
+		deadline bool // the placement deadline passed, else max_duration did
+		status   int
+		code     string
 	}{
-		{"GET", &file{dir: download, data: []byte("abc"), hardStop: -time.Second}, ""},
-		{"PUT", &file{dir: upload, size: 3, hardStop: -time.Second}, "abc"},
+		{"GET", &file{dir: download, data: []byte("abc")}, "", true, 410, "sandbox_ended"},
+		{"PUT", &file{dir: upload, size: 3}, "abc", true, 410, "sandbox_ended"},
+		{"GET", &file{dir: download, data: []byte("abc"), hardStop: past}, "", false, 408,
+			"too_long"},
+		{"PUT", &file{dir: upload, size: 3, hardStop: past}, "abc", false, 408, "too_long"},
 	} {
 		h := newHarness(t)
+		if tc.deadline {
+			h.router.setDeadline(time.Now().Add(past))
+		}
 		r := h.do(t, tc.method, "/"+h.router.add(tc.x), tc.body, contentLength(len(tc.body)))
 		eq(t, fmt.Sprint(tc.method, r.StatusCode, r.code()),
-			fmt.Sprint(tc.method, 410, "sandbox_ended"))
+			fmt.Sprint(tc.method, tc.status, tc.code))
 		if strings.Contains(h.logs.String(), "the router refused") {
 			t.Fatalf("a passed hard stop was logged as a router refusal\n%s", h.logs.String())
+		}
+	}
+}
+
+func TestRouterCutsAnswerAsTheEdgesOwn(t *testing.T) {
+	cut := connect.NewError(connect.CodeDeadlineExceeded, errors.New("cut"))
+	for _, tc := range []struct {
+		name     string
+		hardStop time.Duration // max_duration from the open, 30 minutes when 0
+		deadline time.Duration // the placement deadline from the open, an hour when 0
+		status   int
+		code     string
+	}{
+		{"idle or stalled", 0, 0, 503, "unavailable"},
+		{"max_duration", time.Second, 0, 408, "too_long"},
+		{"deadline", 0, time.Second, 410, "sandbox_ended"},
+	} {
+		for _, method := range []string{"GET", "PUT"} {
+			h := newHarness(t)
+			if tc.deadline != 0 {
+				h.router.setDeadline(time.Now().Add(tc.deadline))
+			}
+			x := &file{dir: download, data: []byte("abc"), hardStop: tc.hardStop, streamErr: cut}
+			body := ""
+			if method == "PUT" {
+				x = &file{dir: upload, size: 3, hardStop: tc.hardStop, streamErr: cut}
+				body = "abc"
+			}
+			r := h.do(t, method, "/"+h.router.add(x), body, contentLength(len(body)))
+			eq(t, fmt.Sprint(tc.name, method, r.StatusCode, r.code()),
+				fmt.Sprint(tc.name, method, tc.status, tc.code))
+			if strings.Contains(h.logs.String(), "the router refused") {
+				t.Fatalf("%s: a router cut was logged as a refusal\n%s", tc.name, h.logs.String())
+			}
 		}
 	}
 }

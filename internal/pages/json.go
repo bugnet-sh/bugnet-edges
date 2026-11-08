@@ -25,6 +25,8 @@ var (
 		message: "This transfer link was not used in time. Ask for a new one."}
 	SandboxEnded = Code{status: 410, code: "sandbox_ended",
 		message: "This sandbox has ended and everything in it was deleted."}
+	TooLong = Code{status: 408, code: "too_long",
+		message: "This transfer ran longer than one transfer may. Try it again."}
 	TrafficLimit = Code{status: 429, code: "budget_spent",
 		message: "This sandbox reached its traffic limit."}
 	RateLimited = Code{status: 429, code: "rate_limited",
@@ -58,8 +60,8 @@ var (
 // allCodes lists every code, for tests
 func allCodes() []Code {
 	return []Code{
-		TokenUnknown, TokenUsed, TokenExpired, SandboxEnded, TrafficLimit, RateLimited, InUse,
-		SizeMismatch, OverCap, FileChanged, Range, ChecksumMismatch, NoSpace, Unavailable,
+		TokenUnknown, TokenUsed, TokenExpired, SandboxEnded, TooLong, TrafficLimit, RateLimited,
+		InUse, SizeMismatch, OverCap, FileChanged, Range, ChecksumMismatch, NoSpace, Unavailable,
 		MethodNotAllowed, ContentRange, TooManyTransfers,
 	}
 }

@@ -144,10 +144,16 @@ Before the router is asked:
   `Retry-After: 600`. A token that resolves always works.
 - `OpenTransfer` runs on the shared router connection. Each `ReadTransfer` and `WriteTransfer`
   gets its own HTTP/1.1 connection, so a stalled transfer stalls no other.
-- The placement's lease holds each transfer. The lease's end, a spent budget or the URL's hard
-  stop cuts it at once. A blocked read or write on the client returns then too.
-- A transfer cut that way before its answer gets 429 `budget_spent` for a spent budget and 410
-  `sandbox_ended` otherwise, a hard stop already passed at the open included.
+- The placement's lease holds each transfer. The lease's end, a spent budget or `max_duration`
+  (30 minutes from the open) cuts it at once. A blocked read or write on the client returns then
+  too. The lease ends at the placement deadline and follows each extension, so an extension
+  during a transfer moves its end.
+- A transfer cut that way before its answer gets 429 `budget_spent` for a spent budget, 408
+  `too_long` at `max_duration`, and 410 `sandbox_ended` otherwise. A hard stop already passed
+  at the open answers the same.
+- The router ends its own streams for idleness, a stalled provider call or its hard stop with
+  `DeadlineExceeded`. Within 2 s of a hard stop that gets the same answer as the edge's own cut,
+  and otherwise 503 `unavailable`, without a warning in the log.
 
 Uploads:
 

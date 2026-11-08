@@ -40,6 +40,8 @@ const (
 	slotRetry = 5 * time.Second
 	// letGoTimeout bounds the call that frees a claim a refused range took
 	letGoTimeout = 5 * time.Second
+	// cutSlack is how near a hard stop a router cut counts as it, the router checking each second
+	cutSlack     = 2 * time.Second
 	routerDomain = "bugnet.router"
 )
 
@@ -98,6 +100,8 @@ type request struct {
 	sum       [32]byte
 	short     string // the first 8 hex characters of the token's SHA-256, the only form logged
 	placement string
+	lease     *lease.Lease // the placement's, nil before the transfer opens
+	stop      time.Time    // the max_duration hard stop, zero when the placement deadline is first
 	status    int
 	bytes     int64
 	start     time.Time
@@ -159,18 +163,25 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	b := m.GetBudget()
-	l := h.d.Traffic.Hold(q.placement, lease.State{
-		Deadline: m.GetExpiresAt().AsTime(), Remaining: b.GetBytesRemaining(),
+	expires := m.GetExpiresAt().AsTime()
+	q.lease = h.d.Traffic.Hold(q.placement, lease.State{
+		Deadline: expires, Remaining: b.GetBytesRemaining(),
 	}, b.GetBytesPerSecond())
-	ctx, stop := l.Child(childKey)
+	ctx, stop := q.lease.Child(childKey)
 	defer stop()
 	defer context.AfterFunc(r.Context(), stop)()
 	cancel := stop
-	if m.GetHardStop() != nil {
+	// The lease follows the placement deadline and each extension, so only max_duration has a timer
+	if hs := m.GetHardStop(); hs != nil && hs.AsTime().Before(expires) {
+		q.stop = hs.AsTime()
 		var end context.CancelFunc
-		ctx, end = context.WithDeadline(ctx, m.GetHardStop().AsTime())
+		ctx, end = context.WithDeadline(ctx, q.stop)
 		defer end()
 		cancel = end
+	}
+	if c, ok := passed(q, 0); ok {
+		answer(q, c)
+		return
 	}
 	if ctx.Err() != nil {
 		answer(q, h.refusal(ctx, q, ctx.Err()))
@@ -637,6 +648,15 @@ func (h *handler) refusal(ctx context.Context, q *request, err error) pages.Code
 		return pages.MethodNotAllowed
 	case connect.CodeCanceled:
 		return pages.Unavailable
+	case connect.CodeDeadlineExceeded:
+		if q.lease == nil {
+			break
+		}
+		// The router cuts an open transfer this way for idleness, a stalled call or its hard stop
+		if c, ok := passed(q, cutSlack); ok {
+			return c
+		}
+		return pages.Unavailable
 	}
 	h.d.Log.Warn("transfer: the router refused", "transfer", q.short, "placement", q.placement,
 		"code", code.String())
@@ -648,8 +668,20 @@ func ended(ctx context.Context) (pages.Code, bool) {
 	if reason := lease.Reason(ctx); reason != "" {
 		return byLease(reason), true
 	}
-	// Only the hard stop puts a deadline on a transfer's context
+	// Only the max_duration hard stop puts a deadline on a transfer's context
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return pages.TooLong, true
+	}
+	return pages.Code{}, false
+}
+
+// passed is the answer for a transfer whose hard stop is within slack of now, false for none
+func passed(q *request, slack time.Duration) (pages.Code, bool) {
+	now := time.Now().Add(slack)
+	switch {
+	case !q.stop.IsZero() && !now.Before(q.stop):
+		return pages.TooLong, true
+	case q.lease != nil && !now.Before(q.lease.State().Deadline):
 		return pages.SandboxEnded, true
 	}
 	return pages.Code{}, false
