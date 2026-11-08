@@ -173,6 +173,9 @@ func TestSettingsBounds(t *testing.T) {
 			[]string{"x402.payments_client_key_credential"}, ""},
 		{"credential with a space", func(s *Settings) { s.PaymentsClientKeyCredential = "a key" },
 			[]string{"x402.payments_client_key_credential"}, "a key"},
+		{"credential of 256 characters", func(s *Settings) {
+			s.PaymentsClientKeyCredential = strings.Repeat("k", 256)
+		}, []string{"x402.payments_client_key_credential"}, strings.Repeat("k", 256)},
 		{"payments_timeout 0", func(s *Settings) { s.PaymentsTimeout = 0 },
 			[]string{"x402.payments_timeout"}, ""},
 		{"paid_header_timeout 0", func(s *Settings) { s.PaidHeaderTimeout = 0 },
@@ -249,6 +252,9 @@ func TestSettingsBounds(t *testing.T) {
 		{"url with a final slash", func(s *Settings) { s.PaymentsURL = "https://127.0.0.1:8449/" }},
 		{"credential with dots", func(s *Settings) {
 			s.PaymentsClientKeyCredential = "x402.key-1"
+		}},
+		{"credential of 255 characters", func(s *Settings) {
+			s.PaymentsClientKeyCredential = strings.Repeat("k", 255)
 		}},
 	}
 	for _, c := range passed {
