@@ -2,6 +2,7 @@ package transfer
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -19,6 +20,7 @@ import (
 	routerv1 "github.com/oynozan/bugnet-proto/gen/go/bugnet/router/v1"
 	"github.com/oynozan/bugnet-proto/gen/go/bugnet/router/v1/routerv1connect"
 	"google.golang.org/genproto/googleapis/rpc/errdetails"
+	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -46,9 +48,14 @@ type file struct {
 	unverified bool
 	// failAfter fails a download's stream with FILE_CHANGED after that many messages, 0 never
 	failAfter int
+	// holdLast keeps a download's stream open before its last message until the edge ends it
+	holdLast bool
 	// stall makes an upload's stream stop reading after its first bytes until closed
 	stall chan struct{}
 	got   int64 // bytes an upload's stream read
+	// hardStop puts the URL's hard stop that far from its open, 30 minutes when 0
+	hardStop time.Duration
+	writes   int // upload streams that named this file and ended
 }
 
 // fakeRouter is an EdgeService that serves transfers from memory and records every call
@@ -61,6 +68,8 @@ type fakeRouter struct {
 	reads    []*routerv1.ReadTransferRequest
 	received int64 // bytes WriteTransfer read
 	aborted  int   // WriteTransfer streams that ended without a clean close
+	readSent int64 // bytes ReadTransfer sent
+	readsCut int   // ReadTransfer streams the edge ended before their last message
 	usage    map[string][2]uint64
 	// openErr, when set, answers every OpenTransfer
 	openErr error
@@ -124,7 +133,15 @@ func (f *fakeRouter) byID(id string) *file {
 	return nil
 }
 
-func refusal(code connect.Code, reason string) error {
+// slowDown is the router's RATE_LIMITED refusal with a RetryInfo of delay
+func slowDown(delay time.Duration) error {
+	ce := refusal(connect.CodeResourceExhausted, "RATE_LIMITED")
+	d, _ := connect.NewErrorDetail(&errdetails.RetryInfo{RetryDelay: durationpb.New(delay)})
+	ce.AddDetail(d)
+	return ce
+}
+
+func refusal(code connect.Code, reason string) *connect.Error {
 	ce := connect.NewError(code, errors.New(reason))
 	d, _ := connect.NewErrorDetail(&errdetails.ErrorInfo{Reason: reason, Domain: "bugnet.router"})
 	ce.AddDetail(d)
@@ -153,9 +170,10 @@ func (f *fakeRouter) OpenTransfer(
 		x.claims++
 	}
 	now := time.Now()
+	stop := cmp.Or(x.hardStop, 30*time.Minute)
 	out := &routerv1.OpenTransferResponse{
 		TransferId: x.id, Lease: "lease-" + x.id[:4], PlacementId: "p1", FileName: x.name,
-		Size: x.size, Etag: x.etag, HardStop: timestamppb.New(now.Add(30 * time.Minute)),
+		Size: x.size, Etag: x.etag, HardStop: timestamppb.New(now.Add(stop)),
 		ExpiresAt: timestamppb.New(now.Add(time.Hour)),
 		Budget:    &routerv1.EdgeBudget{BytesRemaining: gib},
 	}
@@ -192,15 +210,25 @@ func (f *fakeRouter) ReadTransfer(
 		if x.failAfter > 0 && sent == x.failAfter {
 			return refusal(connect.CodeFailedPrecondition, "FILE_CHANGED")
 		}
+		if last && x.holdLast {
+			<-ctx.Done()
+			f.cut()
+			return ctx.Err()
+		}
 		msg := &routerv1.ReadTransferResponse{Data: piece, Verified: last && !x.unverified}
 		if err := out.Send(msg); err != nil {
+			f.cut()
 			return err
 		}
+		f.mu.Lock()
+		f.readSent += int64(len(piece))
+		f.mu.Unlock()
 		sent++
 		if last {
 			break
 		}
 		if err := ctx.Err(); err != nil {
+			f.cut()
 			return err
 		}
 	}
@@ -225,6 +253,11 @@ func (f *fakeRouter) WriteTransfer(
 	if x == nil || first.GetLease() != "lease-"+x.id[:4] {
 		return nil, refusal(connect.CodeNotFound, "TOKEN_UNKNOWN")
 	}
+	defer func() {
+		f.mu.Lock()
+		x.writes++
+		f.mu.Unlock()
+	}()
 	var got bytes.Buffer
 	stalled := false
 	take := func(b []byte) {
@@ -334,6 +367,26 @@ func (f *fakeRouter) gotBytes(toks ...string) []int64 {
 		out = append(out, f.files[tok].got)
 	}
 	return out
+}
+
+func (f *fakeRouter) cut() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.readsCut++
+}
+
+// reading is the bytes every ReadTransfer sent and the streams the edge cut
+func (f *fakeRouter) reading() (int64, int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.readSent, f.readsCut
+}
+
+// writesOf is the upload streams that named tok's file and ended
+func (f *fakeRouter) writesOf(tok string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.files[tok].writes
 }
 
 func (f *fakeRouter) abortedCount() int {

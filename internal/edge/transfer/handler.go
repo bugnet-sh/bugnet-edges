@@ -415,6 +415,7 @@ func (h *handler) upload(
 ) {
 	size := m.GetSize()
 	if n := q.r.ContentLength; n >= 0 && uint64(n) != size {
+		h.letGoUpload(m)
 		if uint64(n) > size {
 			answer(q, pages.OverCap)
 		} else {
@@ -467,11 +468,11 @@ func (h *handler) upload(
 		}
 		if err != nil {
 			cancel()
-			if reason := lease.Reason(ctx); reason != "" {
-				answer(q, byLease(reason))
+			if c, ok := ended(ctx); ok {
+				answer(q, c)
 				return
 			}
-			// The client left, stalled past the idle timeout, or the hard stop passed
+			// The client left or stalled past the idle timeout
 			abort(q)
 		}
 	}
@@ -500,6 +501,20 @@ func (h *handler) upload(
 	q.status = http.StatusOK
 	q.w.WriteHeader(http.StatusOK)
 	_, _ = q.w.Write(body2)
+}
+
+// letGoUpload frees the claim of an upload refused before its body, with a write of another size
+func (h *handler) letGoUpload(m *routerv1.OpenTransferResponse) {
+	ctx, cancel := context.WithTimeout(context.Background(), letGoTimeout)
+	defer cancel()
+	first := &routerv1.WriteTransferRequest{TransferId: m.GetTransferId(), Lease: m.GetLease()}
+	// The router commits only the size, so a close after no bytes, or one byte for 0, is refused
+	if m.GetSize() == 0 {
+		first.Data = []byte{0}
+	}
+	call := h.newCall().WriteTransfer(ctx)
+	_ = call.Send(first)
+	_, _ = call.CloseAndReceive()
 }
 
 // routerEnded answers an upload whose stream the router closed first, with the router's reason
@@ -584,8 +599,8 @@ func (x *idleWriter) Write(p []byte) (int, error) {
 
 // refusal is DP 8.6's answer to a router error, or to the reason the lease ended
 func (h *handler) refusal(ctx context.Context, q *request, err error) pages.Code {
-	if reason := lease.Reason(ctx); reason != "" {
-		return byLease(reason)
+	if c, ok := ended(ctx); ok {
+		return c
 	}
 	switch reasonOf(err) {
 	case "TOKEN_USED":
@@ -626,6 +641,18 @@ func (h *handler) refusal(ctx context.Context, q *request, err error) pages.Code
 	h.d.Log.Warn("transfer: the router refused", "transfer", q.short, "placement", q.placement,
 		"code", code.String())
 	return pages.Unavailable
+}
+
+// ended is the answer for a transfer its lease or hard stop ended, false for any other end
+func ended(ctx context.Context) (pages.Code, bool) {
+	if reason := lease.Reason(ctx); reason != "" {
+		return byLease(reason), true
+	}
+	// Only the hard stop puts a deadline on a transfer's context
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return pages.SandboxEnded, true
+	}
+	return pages.Code{}, false
 }
 
 func byLease(reason string) pages.Code {

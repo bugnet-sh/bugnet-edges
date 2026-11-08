@@ -146,14 +146,17 @@ Before the router is asked:
   gets its own HTTP/1.1 connection, so a stalled transfer stalls no other.
 - The placement's lease holds each transfer. The lease's end, a spent budget or the URL's hard
   stop cuts it at once. A blocked read or write on the client returns then too.
+- A transfer cut that way before its answer gets 429 `budget_spent` for a spent budget and 410
+  `sandbox_ended` otherwise, a hard stop already passed at the open included.
 
 Uploads:
 
 - `OpenTransfer` runs before the body is read, so with `Expect: 100-continue` a bad, used or
   expired token is refused before the file is sent.
 - A `Content-Length` other than the URL's size gets 413 when larger and 400 when smaller, before
-  the body is read. A chunked body must total the size exactly, the same two answers otherwise.
-  A size of 0 takes `Content-Length: 0` or an empty chunked body.
+  the body is read. Its claim is freed first, with a write the router refuses for its size, so a
+  corrected retry works at once. A chunked body must total the size exactly, the same two
+  answers otherwise. A size of 0 takes `Content-Length: 0` or an empty chunked body.
 - The first message to the router carries the transfer id and lease, then the body follows in
   messages of up to `chunk` (256 KiB). A read that comes back short is sent at once, so a slow
   client still shows progress to the router.
