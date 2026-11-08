@@ -110,6 +110,8 @@ type request struct {
 func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	q := &request{w: w, r: r, rc: http.NewResponseController(w), ip: clientIP(r),
 		start: time.Now()}
+	// One request per connection, so the requests an address has in flight are its connections
+	w.Header().Set("Connection", "close")
 	release, ok := h.d.Conns.Acquire(q.ip)
 	if !ok {
 		answer(q, pages.RateLimited.RetryAfter(slotRetry))
@@ -265,7 +267,6 @@ func (h *handler) download(ctx context.Context, q *request, m *routerv1.OpenTran
 	defer context.AfterFunc(ctx, dl.end)()
 	// The last flush gets the idle timeout too, and the deadline never meets a next request
 	defer dl.extend()
-	q.w.Header().Set("Connection", "close")
 	usage := h.d.Traffic.Usage
 	out := h.d.Traffic.Pacer.Lane(q.placement).Writer(&idleWriter{w: q.w, dl: dl}, false,
 		func(n int) {
@@ -449,8 +450,6 @@ func (h *handler) upload(
 	dl := &deadlines{set: q.rc.SetReadDeadline, idle: h.d.IdleTimeout}
 	dl.begin()
 	defer context.AfterFunc(ctx, dl.end)()
-	// An answer before the body's end closes the connection, so the server never waits for the rest
-	q.w.Header().Set("Connection", "close")
 	usage := h.d.Traffic.Usage
 	in := h.d.Traffic.Pacer.Lane(q.placement).Reader(body, true, func(n int) {
 		q.bytes += int64(n)
@@ -508,7 +507,6 @@ func (h *handler) upload(
 	hd.Set("Cache-Control", "no-store")
 	hd.Set("X-Content-Type-Options", "nosniff")
 	hd.Set("Content-Length", strconv.Itoa(len(body2)))
-	hd.Del("Connection")
 	q.status = http.StatusOK
 	q.w.WriteHeader(http.StatusOK)
 	_, _ = q.w.Write(body2)

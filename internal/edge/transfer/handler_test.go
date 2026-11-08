@@ -999,3 +999,37 @@ func TestRouterCutsAnswerAsTheEdgesOwn(t *testing.T) {
 		}
 	}
 }
+
+func TestEveryAnswerClosesItsConnection(t *testing.T) {
+	h := newHarness(t)
+	for _, tc := range []struct {
+		method, path, body string
+		status             int
+	}{
+		{"PUT", "/" + h.upTok(3), "abc", 200},
+		{"GET", "/" + h.downTok([]byte("abc")), "", 200},
+		{"HEAD", "/" + h.downTok([]byte("abc")), "", 200},
+		{"GET", "/" + newToken(), "", 404},
+		{"DELETE", "/" + newToken(), "", 405},
+	} {
+		c, err := net.Dial("tcp", h.addr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _ = fmt.Fprintf(c, "%s %s HTTP/1.1\r\nHost: x\r\nContent-Length: %d\r\n\r\n%s",
+			tc.method, tc.path, len(tc.body), tc.body)
+		_ = c.SetReadDeadline(time.Now().Add(shortWait))
+		br := bufio.NewReader(c)
+		res, err := http.ReadResponse(br, &http.Request{Method: tc.method})
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _ = io.Copy(io.Discard, res.Body)
+		eq(t, fmt.Sprint(tc.method, res.StatusCode, res.Close),
+			fmt.Sprint(tc.method, tc.status, true))
+		if _, err := br.ReadByte(); !errors.Is(err, io.EOF) {
+			t.Fatalf("%s %d: the connection stayed open: %v", tc.method, tc.status, err)
+		}
+		_ = c.Close()
+	}
+}

@@ -133,7 +133,7 @@ Before the router is asked:
 
 | Check | Answer |
 | --- | --- |
-| The address holds `max_connections_per_ip` (16) requests already | 429 `rate_limited` |
+| The address holds `max_connections_per_ip` (16) connections already | 429 `rate_limited` |
 | Another method | 405 `method`, with `Allow: GET, HEAD, PUT` |
 | `Content-Range` on `PUT` | 400 `content_range` |
 | Not `bnx_` and 43 base64url characters, or failed in the last 10 s | 404 `token_unknown` |
@@ -144,6 +144,8 @@ Before the router is asked:
   `Retry-After: 600`. A token that resolves always works.
 - `OpenTransfer` runs on the shared router connection. Each `ReadTransfer` and `WriteTransfer`
   gets its own HTTP/1.1 connection, so a stalled transfer stalls no other.
+- Every answer carries `Connection: close`, so each connection holds one request, and the
+  requests an address has in flight are its open connections.
 - The placement's lease holds each transfer. The lease's end, a spent budget or `max_duration`
   (30 minutes from the open) cuts it at once. A blocked read or write on the client returns then
   too. The lease ends at the placement deadline and follows each extension, so an extension
@@ -189,7 +191,6 @@ Downloads:
   cut, so `curl` sees a short transfer and `curl -C -` resumes, never a mixed file. A router
   refusal before the first byte is answered as JSON instead.
 - A refused range frees its claim at once, with a read the router refuses.
-- Downloads answer `Connection: close`, and an upload answered before its body's end does too.
 
 Bytes count after TLS, toward the sandbox for uploads and from it for downloads, paced by the
 placement's lane. Logs name a transfer only by the first 8 hex characters of its token's SHA-256,
@@ -539,7 +540,7 @@ A `strangers.PerIP` allows a number of requests a minute per address, for the se
 routes. A limit of 0 turns it off.
 
 A `strangers.Conns` caps the connections each address holds open at once, 16 on the transfer
-route. `Acquire` takes a slot and hands back its release, which is safe to call twice. An address
+route, where every answer closes its connection. `Acquire` takes a slot and hands back its release, which is safe to call twice. An address
 with nothing open is forgotten at once.
 
 Both forget an address once its count is back to full and its mark has run out. Each holds at most
