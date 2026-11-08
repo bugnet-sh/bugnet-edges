@@ -16,6 +16,7 @@ a test seller for local and mainnet test runs, never deployed with them.
 | `cmd/bugnet-certs` | Renews the preview wildcards by DNS-01 and checks every served certificate |
 | `cmd/x402-fake-seller` | The fake x402 seller over TLS, settling to a chain or a facilitator |
 | `internal/edge` | Every role's settings, listeners, host routing, HSTS and drain |
+| `internal/secretsroute` | The secrets page and the JSON of the link and bridge calls |
 | `internal/sessionsroute` | The session page, its record and delete calls, and its live view |
 | `internal/edge/preview` | The preview route, proxied to the sandbox's gate with its interstitial |
 | `internal/edge/transfer` | The transfer route, uploads and downloads relayed through the router |
@@ -376,6 +377,37 @@ key.
 - **Headers** past `max_header_bytes` get a 431 page that says to clear the `bugnet.sh` cookies.
 - **Logs** name a call by its route, status and the first 8 hex characters of the id's
   SHA-256, never the body, the key or the link. Strangers' calls log at debug level.
+
+### The secrets route
+
+`--role secrets` serves only `host`, from its own process, Unix user and token. `page_dir` holds
+`index.html` and `assets/`, read once at start. Any `/l/*` path answers `index.html`.
+
+| Call | Auth | Router RPC |
+| --- | --- | --- |
+| `GET /v1/links/<bnsl_ token>` | The link token | `GetSecretLink` |
+| `PUT /v1/links/<bnsl_ token>/secret` | The link token | `SubmitSecretLink` |
+| `GET /v1/sealing-key` | `Authorization: Bearer bnsp_...` | `GetBridgeSealingKey` |
+| `PUT /v1/secrets/<name>` | `Authorization: Bearer bnsp_...` | `PutBridgeSecret` |
+
+- Every answer carries `Cache-Control: no-store`, `Referrer-Policy: no-referrer`, `nosniff`,
+  `Cross-Origin-Opener-Policy: same-origin` and the exact CSP of DP 8.4. No answer sets a cookie,
+  and the `Cookie` request header is never read.
+- A page call needs `Content-Type: application/json`, `Origin: https://<host>` and, when sent,
+  `Sec-Fetch-Site: same-origin`. Otherwise 403 `origin_refused`.
+- A bridge call with an `Origin` or `Sec-Fetch-Site` header gets 403 `browser_refused`. A bearer
+  that is not `bnsp_...` gets 401 `put_grant_invalid` with no router call.
+- Bodies are at most 128 KiB (413 `body_too_large`). Fields are lowerCamelCase, `box` and
+  `publicKey` are base64url without padding, and unknown fields get 400 `invalid_body`. A body
+  with `clientIp` gets 400 `client_ip_refused`, since the route sends the connection's address.
+- A path name other than `spec.name` gets 400 `name_mismatch`.
+- Errors are `{"error": "<reason>", "message": "..."}`. The reason is the router's lower-cased
+  `ErrorInfo` reason. The status follows the Connect code: `InvalidArgument` 400,
+  `PermissionDenied` 401, `NotFound` 404, `FailedPrecondition` 409, `ResourceExhausted` 429,
+  `Unavailable` 503, anything else 500. The message is fixed text, never the router's.
+- `requests_per_minute` limits `/v1` calls per client address, an IPv6 address by its /64. The
+  page and its assets are not counted.
+- Logs hold the method, the path shape (`/v1/links/*`), the status and the time.
 
 ### Drain
 

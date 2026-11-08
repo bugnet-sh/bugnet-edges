@@ -20,6 +20,7 @@ import (
 	"github.com/bugnet-sh/bugnet-edges/internal/metrics"
 	"github.com/bugnet-sh/bugnet-edges/internal/pages"
 	"github.com/bugnet-sh/bugnet-edges/internal/routerclient"
+	"github.com/bugnet-sh/bugnet-edges/internal/secretsroute"
 	"github.com/bugnet-sh/bugnet-edges/internal/sessionsroute"
 	"github.com/bugnet-sh/bugnet-edges/internal/strangers"
 	"github.com/bugnet-sh/bugnet-edges/internal/traffic"
@@ -62,7 +63,7 @@ func run(
 		if err != nil {
 			return err
 		}
-		return edge.NewSecrets(cfg, edge.SecretsDeps{Log: log, Metrics: metrics.New()}).Run(ctx)
+		return runSecrets(ctx, cfg, log)
 	case "sessions":
 		cfg, err := edge.LoadSessions(*path, getenv)
 		if err != nil {
@@ -71,6 +72,23 @@ func run(
 		return runSessions(ctx, cfg, log)
 	}
 	return errUsage
+}
+
+// runSecrets serves the entry page and the sealed PUTs from its own settings and token
+func runSecrets(ctx context.Context, cfg edge.SecretsConfig, log *slog.Logger) error {
+	router := routerv1connect.NewSecretsRouteServiceClient(
+		routerclient.New(cfg.RouterURL, cfg.Token), cfg.RouterURL)
+	route, err := secretsroute.New(router, secretsroute.Options{
+		Host:              cfg.Host,
+		PageDir:           cfg.PageDir,
+		RequestsPerMinute: cfg.RequestsPerMinute,
+		Log:               log.With("role", "secrets"),
+	})
+	if err != nil {
+		return err
+	}
+	return edge.NewSecrets(cfg, edge.SecretsDeps{Route: route, Log: log, Metrics: metrics.New()}).
+		Run(ctx)
 }
 
 // runSessions serves the session page from its bundle, read once at start
