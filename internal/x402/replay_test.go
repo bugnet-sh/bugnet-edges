@@ -6,17 +6,21 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"math/rand/v2"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"runtime"
+	"strings"
 	"sync"
 	"testing"
 	"testing/iotest"
 	"time"
 	"weak"
+
+	"github.com/oynozan/bugnet-edges/internal/metrics"
 )
 
 var (
@@ -244,9 +248,26 @@ func TestReplayReadError(t *testing.T) {
 	if err := r.Wait(ctx); !errors.Is(err, errBroken) {
 		t.Fatalf("Wait gave %v, want %v", err, errBroken)
 	}
+	eq(t, r.Mark, Code(""))
+	eq(t, len(r.Kept), 0)
+	eq(t, r.Sum, [32]byte{})
 	got, err := io.ReadAll(r.Upstream)
 	same(t, got, body)
 	eq(t, errors.Is(err, errBroken), true)
+}
+
+func TestReplayShortBodyKeepsNothing(t *testing.T) {
+	body := pattern(10)
+	in, release := gated(t, body, nil, io.ErrUnexpectedEOF)
+	r := ReadReplay(in, mib, far())
+	close(release)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := r.Wait(ctx); !errors.Is(err, io.ErrUnexpectedEOF) {
+		t.Fatalf("Wait gave %v, want %v", err, io.ErrUnexpectedEOF)
+	}
+	eq(t, r.Kept == nil, true)
+	eq(t, r.Sum, [32]byte{})
 }
 
 func TestReplayErrorAfterTheMark(t *testing.T) {
@@ -270,7 +291,7 @@ func TestReplayWaitHonoursTheContext(t *testing.T) {
 	eq(t, errors.Is(r.Wait(ctx), context.DeadlineExceeded), true)
 }
 
-func TestReplayMarkFreesItsSlot(t *testing.T) {
+func TestReplayMarkFreesItsUnusedRoom(t *testing.T) {
 	b := NewBuffers(256*mib, 4*mib)
 
 	in, release := gated(t, pattern(10), pattern(10), nil)
@@ -278,26 +299,155 @@ func TestReplayMarkFreesItsSlot(t *testing.T) {
 	r.FreeOnMark(take(t, b, "pl_slow", mib))
 	wait(t, r)
 	eq(t, r.Mark, CodeBodySlow)
-	eq(t, b.Held("pl_slow"), int64(0))
+	eq(t, b.Held("pl_slow"), int64(10))
 	close(release)
 
 	r = ReadReplay(bytes.NewReader(pattern(mib+1)), mib, far())
 	r.FreeOnMark(take(t, b, "pl_large", mib))
 	wait(t, r)
 	eq(t, r.Mark, CodeBodyTooLarge)
-	eq(t, b.Held("pl_large"), int64(0))
+	eq(t, b.Held("pl_large"), mib)
 
 	r = ReadReplay(bytes.NewReader(pattern(mib)), mib, far())
 	r.FreeOnMark(take(t, b, "pl_whole", mib))
 	wait(t, r)
 	eq(t, r.Mark, Code(""))
 	eq(t, b.Held("pl_whole"), mib)
+	drain(t, r.Upstream)
+	r.Close()
+	eq(t, b.Held("pl_whole"), mib)
 
-	r = ReadReplay(bytes.NewReader(pattern(mib+1)), mib, far())
+	in, _ = gated(t, pattern(10), nil, nil)
+	r = ReadReplay(in, mib, time.Now().Add(100*time.Millisecond))
 	wait(t, r)
 	r.FreeOnMark(take(t, b, "pl_late", mib))
+	eq(t, b.Held("pl_late"), int64(10))
+	r.Close()
 	eq(t, b.Held("pl_late"), int64(0))
-	eq(t, b.Total(), mib)
+	eq(t, b.Total(), int64(10)+mib+mib)
+}
+
+// gauge is what egress_x402_buffer_bytes reads at a scrape of reg
+func gauge(t *testing.T, reg *metrics.Registry) string {
+	t.Helper()
+	var out strings.Builder
+	if _, err := reg.WriteTo(&out); err != nil {
+		t.Fatal(err)
+	}
+	for line := range strings.Lines(out.String()) {
+		if v, ok := strings.CutPrefix(line, "egress_x402_buffer_bytes "); ok {
+			return strings.TrimSpace(v)
+		}
+	}
+	t.Fatal("no egress_x402_buffer_bytes in the scrape")
+	return ""
+}
+
+func TestMarkedKeepsKeptRoomUntilSent(t *testing.T) {
+	t.Run("body_slow", func(t *testing.T) {
+		b := NewBuffers(256*mib, 4*mib)
+		reg := metrics.New()
+		b.Export(reg)
+		body := pattern(10)
+		in, _ := gated(t, body, nil, nil)
+		r := ReadReplay(in, mib, time.Now().Add(100*time.Millisecond))
+		r.FreeOnMark(take(t, b, "pl_a", mib))
+		wait(t, r)
+		eq(t, r.Mark, CodeBodySlow)
+		eq(t, r.Kept == nil, true)
+		eq(t, b.Held("pl_a"), int64(10))
+		eq(t, gauge(t, reg), "10")
+
+		head := make([]byte, 9)
+		if _, err := io.ReadFull(r.Upstream, head); err != nil {
+			t.Fatal(err)
+		}
+		eq(t, b.Held("pl_a"), int64(10))
+		last := make([]byte, 1)
+		if _, err := io.ReadFull(r.Upstream, last); err != nil {
+			t.Fatal(err)
+		}
+		same(t, append(head, last...), body)
+		eq(t, b.Held("pl_a"), int64(0))
+		eq(t, gauge(t, reg), "0")
+	})
+	t.Run("body_too_large", func(t *testing.T) {
+		b := NewBuffers(256*mib, 4*mib)
+		body := pattern(mib + 10)
+		r := ReadReplay(bytes.NewReader(body), mib, far())
+		r.FreeOnMark(take(t, b, "pl_a", mib))
+		wait(t, r)
+		eq(t, r.Mark, CodeBodyTooLarge)
+		eq(t, b.Held("pl_a"), mib)
+		eq(t, b.Total(), mib)
+
+		head := make([]byte, mib)
+		if _, err := io.ReadFull(r.Upstream, head); err != nil {
+			t.Fatal(err)
+		}
+		eq(t, b.Held("pl_a"), int64(0))
+		eq(t, b.Total(), int64(0))
+		same(t, append(head, drain(t, r.Upstream)...), body)
+	})
+}
+
+func TestMarkedRoomFreedAtEnd(t *testing.T) {
+	t.Run("closed after the mark", func(t *testing.T) {
+		b := NewBuffers(256*mib, 4*mib)
+		in, _ := gated(t, pattern(10), nil, nil)
+		r := ReadReplay(in, mib, time.Now().Add(100*time.Millisecond))
+		r.FreeOnMark(take(t, b, "pl_a", mib))
+		wait(t, r)
+		eq(t, b.Held("pl_a"), int64(10))
+		r.Close()
+		eq(t, b.Held("pl_a"), int64(0))
+		eq(t, b.Total(), int64(0))
+	})
+	t.Run("closed before the mark", func(t *testing.T) {
+		b := NewBuffers(256*mib, 4*mib)
+		in, _ := gated(t, pattern(10), nil, nil)
+		r := ReadReplay(in, mib, time.Now().Add(100*time.Millisecond))
+		r.FreeOnMark(take(t, b, "pl_a", mib))
+		r.Close()
+		wait(t, r)
+		eq(t, r.Mark, CodeBodySlow)
+		eq(t, b.Held("pl_a"), int64(0))
+		eq(t, b.Total(), int64(0))
+	})
+}
+
+func TestReplayWaitPrefersTheEnd(t *testing.T) {
+	r := ReadReplay(bytes.NewReader(pattern(10)), mib, far())
+	wait(t, r)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	for i := range 100 {
+		if err := r.Wait(ctx); err != nil {
+			t.Fatalf("call %d: Wait gave %v on a finished read", i, err)
+		}
+	}
+}
+
+func TestReplayEmptyReadWhileKeeping(t *testing.T) {
+	body := pattern(10)
+	in, _ := gated(t, body, nil, nil)
+	r := ReadReplay(in, mib, far())
+	head := make([]byte, len(body))
+	if _, err := io.ReadFull(r.Upstream, head); err != nil {
+		t.Fatal(err)
+	}
+	read := make(chan error, 1)
+	go func() {
+		n, err := r.Upstream.Read(nil)
+		if err == nil && n != 0 {
+			err = fmt.Errorf("read %d bytes into none", n)
+		}
+		read <- err
+	}()
+	if err := within(read); err != nil {
+		t.Fatalf("an empty read gave %v, want 0 and nil at once", err)
+	}
+	r.Close()
 }
 
 func TestReplayKeptHasNoSpareRoom(t *testing.T) {

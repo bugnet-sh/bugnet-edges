@@ -72,11 +72,30 @@ func (s *Slot) Free() {
 	if s == nil || !s.freed.CompareAndSwap(false, true) {
 		return
 	}
+	s.b.mu.Lock()
+	defer s.b.mu.Unlock()
+	s.give(s.n)
+}
+
+// shrink gives back the slot's room past n bytes, and nothing once it is freed
+func (s *Slot) shrink(n int64) {
+	if s == nil {
+		return
+	}
+	s.b.mu.Lock()
+	defer s.b.mu.Unlock()
+	if s.freed.Load() || n < 0 || n >= s.n {
+		return
+	}
+	s.give(s.n - n)
+	s.n = n
+}
+
+// give returns k bytes of the slot's room to its placement and the budget, with b.mu held
+func (s *Slot) give(k int64) {
 	b := s.b
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	b.total -= s.n
-	if held := b.held[s.placement] - s.n; held > 0 {
+	b.total -= k
+	if held := b.held[s.placement] - k; held > 0 {
 		b.held[s.placement] = held
 	} else {
 		delete(b.held, s.placement)

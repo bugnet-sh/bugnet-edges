@@ -14,9 +14,9 @@ const chunkSize = 4 << 10
 
 // Replay is a request body kept for one paid retry
 type Replay struct {
-	// Kept is the body for the paid retry once Wait returns, nil when the read is marked
+	// Kept is the body for the paid retry once Wait returns nil, else nil
 	Kept []byte
-	// Sum is the SHA-256 of Kept, zero when the read is marked
+	// Sum is the SHA-256 of Kept, zero when Kept is nil
 	Sum [32]byte
 	// Mark is empty, body_slow or body_too_large
 	Mark Code
@@ -70,7 +70,7 @@ func ReadReplay(body io.Reader, limit int64, deadline time.Time) *Replay {
 	return r
 }
 
-// Wait returns once Kept, Sum and Mark are set, at the end, the limit or the deadline
+// Wait returns once Kept, Sum and Mark are set, with the body's error when it failed first
 func (r *Replay) Wait(ctx context.Context) error {
 	select {
 	case <-r.done:
@@ -95,6 +95,7 @@ func (r *Replay) Close() {
 	close(r.closed)
 	if r.stopped {
 		r.buf = nil
+		r.release()
 	}
 	r.grown.Broadcast()
 }
@@ -109,14 +110,23 @@ func (r *Replay) isClosed() bool {
 	}
 }
 
-// FreeOnMark frees s as soon as the read is marked, at once when it already is
+// FreeOnMark frees s once the read is marked, past its kept bytes until they are sent or Close
 func (r *Replay) FreeOnMark(s *Slot) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if !r.stopped {
-		r.slot = s
-	} else if r.Mark != "" {
-		s.Free()
+	r.slot = s
+	r.release()
+}
+
+// release gives back the slot room a marked read no longer holds, with r.mu held
+func (r *Replay) release() {
+	if r.Mark == "" {
+		return
+	}
+	if r.buf == nil {
+		r.slot.Free()
+	} else {
+		r.slot.shrink(int64(len(r.buf)))
 	}
 }
 
@@ -166,15 +176,14 @@ func (r *Replay) stop(mark Code) {
 	}
 	r.stopped = true
 	r.Mark = mark
-	if mark == "" {
+	if mark == "" && r.err == nil {
 		r.Kept = r.buf[:len(r.buf):len(r.buf)]
 		r.Sum = sha256.Sum256(r.Kept)
-	} else {
-		r.slot.Free()
 	}
 	if r.isClosed() {
 		r.buf = nil
 	}
+	r.release()
 	r.grown.Broadcast()
 	close(r.done)
 }
@@ -233,6 +242,7 @@ func (u *upstream) readKept(p []byte) (int, error) {
 	if r.stopped && n == len(kept) {
 		u.past = true
 		r.buf = nil
+		r.release()
 	}
 	r.mu.Unlock()
 	copy(p, kept[:n])
