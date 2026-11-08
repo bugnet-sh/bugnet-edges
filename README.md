@@ -538,6 +538,11 @@ loopback, `0.0.0.0/8`, private, link-local, CGNAT, unique-local, NAT64, 6to4, Te
 and reserved ranges, their IPv4-mapped forms, and every address of the host. The x402 transport
 uses the same dialer, and it has no allow list.
 
+A build with `-tags localrun`, made only by `make x402-local` in `bugnet-router`, reads a
+`[localrun]` table. `upstream_addrs` maps a seller name to the host and port dialed for it, which
+skips the refusals above for that name, and `upstream_roots_file` is the PEM bundle the x402
+transport trusts. A normal build refuses the table as unknown.
+
 ### Freshness and limits
 
 - `SecretsChanged` makes the proxy resolve the placement again. A placeholder it does not hold
