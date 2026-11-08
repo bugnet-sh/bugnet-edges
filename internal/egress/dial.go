@@ -70,6 +70,8 @@ type Dialer struct {
 	own      map[netip.Addr]bool
 	ownAt    time.Time
 	ownAddrs func() ([]net.Addr, error)
+	// upstream maps a host to the address to dial for it, set only by a localrun build
+	upstream func(host string) (string, bool)
 }
 
 // NewDialer resolves through resolvers, each a host and port, and never through the local files
@@ -82,6 +84,10 @@ func (d *Dialer) DialContext(ctx context.Context, network, addr string) (net.Con
 	host, port, err := net.SplitHostPort(addr)
 	if err != nil {
 		return nil, err
+	}
+	if to, ok := d.upstreamFor(host); ok {
+		var dl net.Dialer
+		return dl.DialContext(ctx, network, to)
 	}
 	var ips []netip.Addr
 	if ip, perr := netip.ParseAddr(host); perr == nil {
@@ -110,6 +116,13 @@ func (d *Dialer) DialContext(ctx context.Context, network, addr string) (net.Con
 		return nil, errNoAnswer
 	}
 	return nil, errors.Join(errs...)
+}
+
+func (d *Dialer) upstreamFor(host string) (string, bool) {
+	if d.upstream == nil {
+		return "", false
+	}
+	return d.upstream(host)
 }
 
 // control is the last check, run on the address the kernel is about to connect to

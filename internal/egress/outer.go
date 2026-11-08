@@ -176,6 +176,9 @@ func New(cfg Config, d Deps) *Server {
 	if s.seller == nil {
 		s.seller = s.newSellerTransport()
 	}
+	if err := s.applyLocalrun(); err != nil {
+		s.log.Error("localrun settings refused", "err", err)
+	}
 	s.proxy = s.newProxy(d.Transport)
 	s.inner = s.innerServer()
 	return s
