@@ -15,6 +15,7 @@ import (
 	"mime"
 	"net/http"
 	"net/netip"
+	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -61,7 +62,9 @@ type Options struct {
 	LivePerIP            int // live streams of one client address
 	LiveMax              int // live streams of the process
 
-	Keepalive    time.Duration // between ": keepalive" lines, 15 s when 0
+	BodyTimeout  time.Duration // to read a page call's body, 10 s when 0
+	CallTimeout  time.Duration // for a record or delete call to the router, 10 s when 0
+	Keepalive    time.Duration // between keepalive lines, 15 s when 0
 	WriteTimeout time.Duration // each live write's deadline, 30 s when 0
 	// FirstFrame is how long a live call waits for the router's first frame before its 200
 	FirstFrame time.Duration
@@ -81,6 +84,8 @@ func (o *Options) defaults() {
 			*v = d
 		}
 	}
+	setD(&o.BodyTimeout, 10*time.Second)
+	setD(&o.CallTimeout, 10*time.Second)
 	setD(&o.Keepalive, 15*time.Second)
 	setD(&o.WriteTimeout, 30*time.Second)
 	setD(&o.FirstFrame, 2*time.Second)
@@ -256,15 +261,25 @@ func (h *Handler) v1(w http.ResponseWriter, r *http.Request, path string) {
 		h.answer(q, http.StatusRequestEntityTooLarge, 0)
 		return
 	}
+	// A slow body holds nothing past its deadline, and a live stream's reads then have none
+	rc := http.NewResponseController(w)
+	_ = rc.SetReadDeadline(time.Now().Add(h.o.BodyTimeout))
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBody))
 	if err != nil {
-		if mbe := (*http.MaxBytesError)(nil); errors.As(err, &mbe) {
+		// The deadline stays, so the server never waits on the rest of the body
+		w.Header().Set("Connection", "close")
+		mbe := (*http.MaxBytesError)(nil)
+		switch {
+		case errors.As(err, &mbe):
 			h.answer(q, http.StatusRequestEntityTooLarge, 0)
-		} else {
+		case errors.Is(err, os.ErrDeadlineExceeded):
+			h.answer(q, http.StatusRequestTimeout, 0)
+		default:
 			h.answer(q, http.StatusBadRequest, 0)
 		}
 		return
 	}
+	_ = rc.SetReadDeadline(time.Time{})
 	id, seq, ok := v1Path(path)
 	if !ok {
 		h.answer(q, http.StatusNotFound, 0)
@@ -394,7 +409,9 @@ func (h *Handler) record(q *call, body []byte) {
 	if !ok {
 		return
 	}
-	res, err := h.router.GetSessionRecord(q.r.Context(), connect.NewRequest(
+	ctx, cancel := context.WithTimeout(q.r.Context(), h.o.CallTimeout)
+	defer cancel()
+	res, err := h.router.GetSessionRecord(ctx, connect.NewRequest(
 		&routerv1.GetSessionRecordRequest{Id: q.id, Key: b.K}))
 	if err != nil {
 		h.refused(q, err, true)
@@ -447,7 +464,9 @@ func (h *Handler) delete(q *call, body []byte) {
 	if !ok {
 		return
 	}
-	_, err := h.router.DeleteSessionRecord(q.r.Context(), connect.NewRequest(
+	ctx, cancel := context.WithTimeout(q.r.Context(), h.o.CallTimeout)
+	defer cancel()
+	_, err := h.router.DeleteSessionRecord(ctx, connect.NewRequest(
 		&routerv1.DeleteSessionRecordRequest{Id: q.id, Key: b.K}))
 	if err != nil {
 		h.refused(q, err, true)

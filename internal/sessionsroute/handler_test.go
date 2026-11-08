@@ -1,10 +1,12 @@
 package sessionsroute
 
 import (
+	"bufio"
 	"bytes"
 	"compress/gzip"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/netip"
 	"os"
@@ -562,4 +564,40 @@ func TestHotIDNeverStarvesAFreshRightKey(t *testing.T) {
 			eq(t, ask(key, "203.0.113.9:4000").StatusCode, 200)
 		}
 	}
+}
+
+func TestSlowBodyTimesOut(t *testing.T) {
+	x := newHarness(t, func(o *Options) { o.BodyTimeout = 200 * time.Millisecond })
+	c, err := net.Dial("tcp", x.srv.Listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = c.Close() }()
+	_, _ = fmt.Fprintf(c, "POST /v1/s/%s HTTP/1.1\r\nHost: x\r\nOrigin: %s\r\n"+
+		"Sec-Fetch-Site: same-origin\r\nContent-Type: application/json\r\n"+
+		"Content-Length: 50\r\n\r\n{\"k\"", id, x.origin)
+	_ = c.SetReadDeadline(time.Now().Add(5 * time.Second))
+	res, err := http.ReadResponse(bufio.NewReader(c), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	eq(t, res.StatusCode, 408)
+	gets, _, _ := x.router.counts()
+	eq(t, gets, 0)
+}
+
+func TestRouterCallsHaveADeadline(t *testing.T) {
+	x := newHarness(t, func(o *Options) { o.CallTimeout = 100 * time.Millisecond })
+	x.router.set(func(f *fakeRouter) { f.delay = 2 * time.Second })
+	for _, method := range []string{"POST", "DELETE"} {
+		start := time.Now()
+		r := x.post(t, method, id, key)
+		eq(t, r.StatusCode, 503)
+		eq(t, r.Header.Get("Retry-After"), "2")
+		if took := time.Since(start); took > time.Second {
+			t.Fatalf("%s took %s", method, took)
+		}
+	}
+	ids, offenders := x.h.ids.size()
+	eq(t, fmt.Sprint(ids, offenders), "0 0")
 }

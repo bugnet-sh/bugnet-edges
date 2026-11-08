@@ -109,7 +109,11 @@ func TestLiveFrames(t *testing.T) {
 }
 
 func TestLiveKeepalive(t *testing.T) {
-	x := newHarness(t, func(o *Options) { o.Keepalive = 50 * time.Millisecond })
+	// The body's read deadline never reaches the stream that follows it
+	x := newHarness(t, func(o *Options) {
+		o.Keepalive = 50 * time.Millisecond
+		o.BodyTimeout = 20 * time.Millisecond
+	})
 	x.router.set(func(f *fakeRouter) { f.live[1] = held() })
 	_, br := x.openStream(t, id)
 	for range 2 {
