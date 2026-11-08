@@ -1,11 +1,18 @@
 package preview
 
 import (
+	"context"
+	"crypto/tls"
+	"crypto/x509"
+	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -821,8 +828,26 @@ func TestUsageCountsBothWays(t *testing.T) {
 	})
 }
 
-func TestTransportErrorsLogWithoutTheURL(t *testing.T) {
-	err := &url.Error{Op: "Get", URL: "https://route.example/app?secret=1", Err: io.EOF}
-	eq(t, withoutURL(err), error(io.EOF))
-	eq(t, withoutURL(io.ErrUnexpectedEOF), error(io.ErrUnexpectedEOF))
+func TestTransportErrorsLogOnlyTheirClass(t *testing.T) {
+	route := "abc123-29417.on.boat.dev"
+	wrap := func(err error) error {
+		return &url.Error{Op: "Get", URL: "https://" + route + "/app?secret=1", Err: err}
+	}
+	dns := &net.DNSError{Err: "no such host", Name: route, IsNotFound: true}
+	for err, want := range map[error]string{
+		wrap(&net.OpError{Op: "dial", Net: "tcp", Err: dns}):                    "dial",
+		wrap(&net.OpError{Op: "read", Net: "tcp", Err: syscall.ECONNRESET}):     "reset",
+		wrap(&net.OpError{Op: "write", Net: "tcp", Err: syscall.EPIPE}):         "reset",
+		wrap(&tls.CertificateVerificationError{Err: x509.HostnameError{}}):      "tls",
+		wrap(tls.RecordHeaderError{Msg: "first record does not look like"}):     "tls",
+		wrap(context.DeadlineExceeded):                                          "timeout",
+		wrap(&net.OpError{Op: "read", Net: "tcp", Err: os.ErrDeadlineExceeded}): "timeout",
+		wrap(io.EOF):              "eof",
+		wrap(io.ErrUnexpectedEOF): "eof",
+		wrap(errors.New("net/http: HTTP/1.x transport connection broken " + route)): "other",
+	} {
+		got := errClass(err)
+		eq(t, got, want)
+		eq(t, strings.Contains(got, route), false)
+	}
 }

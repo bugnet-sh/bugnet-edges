@@ -4,13 +4,16 @@ package preview
 import (
 	"context"
 	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/netip"
-	"net/url"
+	"os"
 	"strings"
 	"sync"
 	"syscall"
@@ -298,18 +301,40 @@ func (h *handler) proxyError(w http.ResponseWriter, r *http.Request, err error) 
 		pages.Write(w, pages.GateDown)
 	default:
 		h.d.Log.Debug("preview: the gate route failed", "preview", c.rt.id,
-			"placement", c.rt.placement, "err", withoutURL(err))
+			"placement", c.rt.placement, "err", errClass(err))
 		pages.Write(w, pages.GateDown)
 	}
 }
 
-// withoutURL drops the request URL a transport error names, since its query is the app's
-func withoutURL(err error) error {
-	var ue *url.Error
-	if errors.As(err, &ue) {
-		return ue.Err
+// errClass names the kind of a transport error, since its text can name the route's host
+func errClass(err error) string {
+	var (
+		ne   net.Error
+		ve   *tls.CertificateVerificationError
+		rh   tls.RecordHeaderError
+		ae   tls.AlertError
+		he   x509.HostnameError
+		ue   x509.UnknownAuthorityError
+		ie   x509.CertificateInvalidError
+		oe   *net.OpError
+		dnse *net.DNSError
+	)
+	switch {
+	case errors.Is(err, context.DeadlineExceeded), errors.Is(err, os.ErrDeadlineExceeded),
+		errors.As(err, &ne) && ne.Timeout():
+		return "timeout"
+	case errors.As(err, &ve), errors.As(err, &rh), errors.As(err, &ae), errors.As(err, &he),
+		errors.As(err, &ue), errors.As(err, &ie):
+		return "tls"
+	case errors.Is(err, syscall.ECONNRESET), errors.Is(err, syscall.EPIPE),
+		errors.Is(err, syscall.ECONNABORTED):
+		return "reset"
+	case errors.Is(err, io.EOF), errors.Is(err, io.ErrUnexpectedEOF):
+		return "eof"
+	case errors.As(err, &dnse), errors.As(err, &oe) && oe.Op == "dial":
+		return "dial"
 	}
-	return err
+	return "other"
 }
 
 // repair asks the router to repair a preview's gate, at most once a minute per preview
