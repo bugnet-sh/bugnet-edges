@@ -36,8 +36,10 @@ type Replay struct {
 	mu sync.Mutex
 	// grown wakes Upstream when buf grows, the keeping stops or Close is called
 	grown *sync.Cond
-	// buf is the body kept so far in room the size of the slot, nil once Upstream needs none of it
-	buf     []byte
+	// buf is the body kept so far, in room the size of the slot until a mark trims it to its length
+	buf []byte
+	// sent counts the bytes of buf Upstream yielded
+	sent    int
 	stopped bool
 	slot    *Slot
 	// err is the body's error before the stop, which Wait returns
@@ -122,16 +124,19 @@ func (r *Replay) FreeOnMark(s *Slot) {
 	r.release()
 }
 
-// release gives back the slot room a marked read no longer holds, with r.mu held
+// release gives back the room a marked read no longer holds, in memory and slot, with r.mu held
 func (r *Replay) release() {
 	if r.Mark == "" {
 		return
 	}
 	if r.buf == nil {
 		r.slot.Free()
-	} else {
-		r.slot.shrink(int64(len(r.buf)))
+		return
 	}
+	if cap(r.buf) > len(r.buf) {
+		r.buf = append(make([]byte, 0, len(r.buf)), r.buf...)
+	}
+	r.slot.shrink(int64(len(r.buf)))
 }
 
 // keep moves body into buf a chunk at a time, so the read in flight at a stop holds no slot room
@@ -184,7 +189,7 @@ func (r *Replay) stop(mark Code) {
 		r.Kept = r.buf[:len(r.buf):len(r.buf)]
 		r.Sum = sha256.Sum256(r.Kept)
 	}
-	if r.isClosed() {
+	if r.isClosed() || (mark != "" && r.sent == len(r.buf)) {
 		r.buf = nil
 	}
 	r.release()
@@ -195,8 +200,6 @@ func (r *Replay) stop(mark Code) {
 // upstream is Replay.Upstream
 type upstream struct {
 	r *Replay
-	// sent counts the bytes of buf yielded
-	sent int
 	// past is set once every kept byte is yielded after the stop
 	past bool
 }
@@ -234,15 +237,21 @@ func (u *upstream) Read(p []byte) (int, error) {
 func (u *upstream) readKept(p []byte) (int, error) {
 	r := u.r
 	r.mu.Lock()
-	for u.sent == len(r.buf) && !r.stopped && !r.isClosed() {
+	for r.sent == len(r.buf) && !r.stopped && !r.isClosed() {
 		r.grown.Wait()
 	}
 	if r.isClosed() {
 		r.mu.Unlock()
 		return 0, io.ErrClosedPipe
 	}
-	kept := r.buf[u.sent:]
+	if r.buf == nil {
+		u.past = true
+		r.mu.Unlock()
+		return 0, nil
+	}
+	kept := r.buf[r.sent:]
 	n := min(len(p), len(kept))
+	r.sent += n
 	if r.stopped && n == len(kept) {
 		u.past = true
 		r.buf = nil
@@ -250,6 +259,5 @@ func (u *upstream) readKept(p []byte) (int, error) {
 	}
 	r.mu.Unlock()
 	copy(p, kept[:n])
-	u.sent += n
 	return n, nil
 }

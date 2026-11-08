@@ -391,6 +391,41 @@ func TestMarkedKeepsKeptRoomUntilSent(t *testing.T) {
 	})
 }
 
+func TestMarkedReadKeepsNoSpareRoom(t *testing.T) {
+	b := NewBuffers(256*mib, 4*mib)
+	body := pattern(20)
+	in, release := gated(t, body[:10], body[10:], nil)
+	r := ReadReplay(in, mib, time.Now().Add(100*time.Millisecond))
+	r.FreeOnMark(take(t, b, "pl_a", mib))
+	wait(t, r)
+	eq(t, r.Mark, CodeBodySlow)
+	eq(t, b.Held("pl_a"), int64(10))
+	r.mu.Lock()
+	room := cap(r.buf)
+	r.mu.Unlock()
+	eq(t, room, 10)
+	close(release)
+	same(t, drain(t, r.Upstream), body)
+}
+
+func TestMarkedReadFreesSentRoomAtTheStop(t *testing.T) {
+	b := NewBuffers(256*mib, 4*mib)
+	body := pattern(20)
+	in, release := gated(t, body[:10], body[10:], nil)
+	r := ReadReplay(in, mib, time.Now().Add(100*time.Millisecond))
+	r.FreeOnMark(take(t, b, "pl_a", mib))
+	head := make([]byte, 10)
+	if _, err := io.ReadFull(r.Upstream, head); err != nil {
+		t.Fatal(err)
+	}
+	wait(t, r)
+	eq(t, r.Mark, CodeBodySlow)
+	eq(t, b.Held("pl_a"), int64(0))
+	eq(t, b.Total(), int64(0))
+	close(release)
+	same(t, append(head, drain(t, r.Upstream)...), body)
+}
+
 func TestMarkedRoomFreedAtEnd(t *testing.T) {
 	t.Run("closed after the mark", func(t *testing.T) {
 		b := NewBuffers(256*mib, 4*mib)
