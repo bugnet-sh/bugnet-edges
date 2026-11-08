@@ -447,6 +447,19 @@ func TestUnmarkedReadLeavesItsSlotToTheCaller(t *testing.T) {
 	eq(t, b.Total(), int64(0))
 }
 
+func TestShrinkAfterFreeGivesNothing(t *testing.T) {
+	b := NewBuffers(256*mib, 4*mib)
+	in, _ := gated(t, pattern(10), nil, nil)
+	r := ReadReplay(in, mib, time.Now().Add(100*time.Millisecond))
+	s := take(t, b, "pl_a", mib)
+	r.FreeOnMark(s)
+	s.Free()
+	wait(t, r)
+	eq(t, r.Mark, CodeBodySlow)
+	eq(t, b.Held("pl_a"), int64(0))
+	eq(t, b.Total(), int64(0))
+}
+
 func TestReplayWaitPrefersTheEnd(t *testing.T) {
 	r := ReadReplay(bytes.NewReader(pattern(10)), mib, far())
 	wait(t, r)

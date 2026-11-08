@@ -92,6 +92,15 @@ func TestFreeIsIdempotent(t *testing.T) {
 	none.Free()
 }
 
+func TestShrinkOfAFreedSlot(t *testing.T) {
+	b := NewBuffers(256*mib, 4*mib)
+	s := take(t, b, "pl_a", mib)
+	s.Free()
+	s.shrink(10)
+	eq(t, b.Held("pl_a"), int64(0))
+	eq(t, b.Total(), int64(0))
+}
+
 func TestTakeRefusesBadSizes(t *testing.T) {
 	b := NewBuffers(256*mib, 4*mib)
 	_, ok := b.Take("pl_a", -1)
