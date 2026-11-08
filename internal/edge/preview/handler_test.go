@@ -3,6 +3,7 @@ package preview
 import (
 	"io"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"testing"
@@ -810,4 +811,10 @@ func TestUsageCountsBothWays(t *testing.T) {
 		defer x.router.mu.Unlock()
 		return x.router.used == 20000
 	})
+}
+
+func TestTransportErrorsLogWithoutTheURL(t *testing.T) {
+	err := &url.Error{Op: "Get", URL: "https://route.example/app?secret=1", Err: io.EOF}
+	eq(t, withoutURL(err), error(io.EOF))
+	eq(t, withoutURL(io.ErrUnexpectedEOF), error(io.ErrUnexpectedEOF))
 }

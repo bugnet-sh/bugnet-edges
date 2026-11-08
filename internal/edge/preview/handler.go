@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/netip"
+	"net/url"
 	"strings"
 	"sync"
 	"syscall"
@@ -297,9 +298,18 @@ func (h *handler) proxyError(w http.ResponseWriter, r *http.Request, err error) 
 		pages.Write(w, pages.GateDown)
 	default:
 		h.d.Log.Debug("preview: the gate route failed", "preview", c.rt.id,
-			"placement", c.rt.placement, "err", err)
+			"placement", c.rt.placement, "err", withoutURL(err))
 		pages.Write(w, pages.GateDown)
 	}
+}
+
+// withoutURL drops the request URL a transport error names, since its query is the app's
+func withoutURL(err error) error {
+	var ue *url.Error
+	if errors.As(err, &ue) {
+		return ue.Err
+	}
+	return err
 }
 
 // repair asks the router to repair a preview's gate, at most once a minute per preview
