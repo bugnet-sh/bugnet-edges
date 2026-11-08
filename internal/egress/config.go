@@ -65,6 +65,9 @@ type Config struct {
 
 	X402 x402.Settings `toml:"x402"`
 
+	// localrunSettings is empty except in a localrun build
+	localrunSettings
+
 	Token      string `toml:"-"` // BUGNET_EGRESS_TOKEN
 	FetchToken string `toml:"-"` // BUGNET_EGRESS_FETCH_TOKEN, empty turns the fetcher's entry off
 }
