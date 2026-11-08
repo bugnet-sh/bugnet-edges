@@ -141,7 +141,7 @@ func TestServerSettings(t *testing.T) {
 	eq(t, fetch(t, c, "GET", "https://"+transferHost+"/bnx_abc", "X-Small", "a").StatusCode, 200)
 }
 
-// Ruling E1: the preview names take a full bugnet.sh cookie jar, transfer and hooks 64 KiB
+// Ruling E1 gives the preview names a full bugnet.sh cookie jar and transfer and hooks 64 KiB
 func TestHeaderLimitPerName(t *testing.T) {
 	s := New(testConfig(t), fakeDeps())
 	start(t, s)
