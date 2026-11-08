@@ -102,6 +102,10 @@ func (s *Server) serveInner(w http.ResponseWriter, r *http.Request) {
 
 	kind := s.kindOf(p, st.host)
 	v := p.view()
+	if kind == kindX402 {
+		s.serveX402(sw, r, p, st, v.x402)
+		return
+	}
 	st.swap = swapHeaders(r.Header, st.host, v.set)
 	if st.swap.missing {
 		// A placeholder the cached set lacks may be a secret added a moment ago
@@ -136,9 +140,12 @@ func answer(w http.ResponseWriter, status int) {
 // finish counts and logs the request, never a header value, a URL with a query or a body
 func (s *Server) finish(p *placement, r *http.Request, st *reqState, start time.Time) {
 	kind := "preset"
-	if p.view().hosts[st.host] == kindCustom {
+	switch p.view().hosts[st.host] {
+	case kindCustom:
 		kind = "custom"
 		s.custom.addBytes(st.host, st.bytes)
+	case kindX402:
+		kind = "x402"
 	}
 	s.m.requests.Inc(kind, itoa(st.status), boolText(st.swap.did()))
 	secret := ""

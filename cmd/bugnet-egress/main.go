@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -18,6 +19,7 @@ import (
 
 	"github.com/bugnet-sh/bugnet-edges/internal/egress"
 	"github.com/bugnet-sh/bugnet-edges/internal/routerclient"
+	"github.com/bugnet-sh/bugnet-edges/internal/x402"
 )
 
 func main() {
@@ -84,9 +86,29 @@ func serve(
 	}
 	router := routerv1connect.NewEgressServiceClient(
 		routerclient.New(cfg.RouterURL, cfg.Token), cfg.RouterURL)
-	return egress.New(cfg, egress.Deps{
-		Router: router, Keys: keys, Minter: minter, Log: log,
-	}).Run(ctx)
+	events := x402.NewEvents(x402.EventsSend(router), time.Duration(cfg.X402.EventFlushInterval),
+		time.Now, log)
+	counters := x402.NewCounters()
+	srv := egress.New(cfg, egress.Deps{
+		Router: router, Keys: keys, Minter: minter, Log: log, Events: events, Counters: counters,
+		HostRate: x402.NewHostRate(cfg.CustomHostRequestsPerMinute,
+			cfg.X402.HostRateFloorPerPlacement, time.Now),
+	})
+	events.SetServices(srv.HasX402)
+	var side sync.WaitGroup
+	side.Add(2)
+	go func() {
+		defer side.Done()
+		events.Run(ctx)
+	}()
+	go func() {
+		defer side.Done()
+		counters.RunReports(ctx, x402.UnpaidSend(router, egress.ReporterID),
+			time.Duration(cfg.UsageReportInterval))
+	}()
+	err = srv.Run(ctx)
+	side.Wait()
+	return err
 }
 
 // caInit writes egress-ca.key and egress-ca.pem into the directory

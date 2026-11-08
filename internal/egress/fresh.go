@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"maps"
 	"slices"
 	"strings"
 	"sync"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/bugnet-sh/bugnet-edges/internal/lease"
 	"github.com/bugnet-sh/bugnet-edges/internal/pace"
+	"github.com/bugnet-sh/bugnet-edges/internal/x402"
 )
 
 const (
@@ -37,10 +39,12 @@ const (
 	kindPreset
 	// kindCustom is a host outside every preset, forwarded only after a swap
 	kindCustom
+	// kindX402 is a host with x402 services, which no secret is ever swapped on (XS 6.6)
+	kindX402
 )
 
-// hostSet lists the hosts a placement's secrets reach, each with its kind
-func hostSet(resp *routerv1.ResolveTunnelResponse) map[string]hostKind {
+// hostSet lists the hosts a placement's secrets and x402 services reach, each with its kind
+func hostSet(resp *routerv1.ResolveTunnelResponse, cfg x402.Config) map[string]hostKind {
 	out := map[string]hostKind{}
 	for _, es := range resp.GetSecrets() {
 		custom := canonical(es.GetCustomHosts())
@@ -52,6 +56,9 @@ func hostSet(resp *routerv1.ResolveTunnelResponse) map[string]hostKind {
 			}
 		}
 	}
+	for _, h := range cfg.Hosts() {
+		out[h] = kindX402
+	}
 	return out
 }
 
@@ -62,6 +69,7 @@ type view struct {
 	hosts map[string]hostKind
 	set   *secretSet
 	ca    uint32
+	x402  x402.Config
 }
 
 // placement is one placement's proxy state for one kind of caller, a sandbox or the fetcher
@@ -115,6 +123,14 @@ func (p *placement) dropSecrets() {
 	p.mu.Lock()
 	cur := p.cur
 	next := *cur
+	next.x402 = x402.Config{}
+	next.hosts = maps.Collect(func(yield func(string, hostKind) bool) {
+		for h, k := range cur.hosts {
+			if k != kindX402 && !yield(h, k) {
+				return
+			}
+		}
+	})
 	next.set = &secretSet{byHash: map[[32]byte]*secret{}, headers: map[string][]string{}}
 	p.cur = &next
 	p.mu.Unlock()
@@ -276,6 +292,7 @@ func (s *Server) place(
 			flight: make(chan struct{}, flight),
 		}
 		p.cur = s.buildView(p, resp)
+		s.mergeUsed(p, p.cur)
 		p.attemptAt = p.cur.at
 		p.lease = s.hold(p.id, resp)
 		p.lane = s.tr.Pacer.Lane(p.id)
@@ -313,8 +330,16 @@ func (s *Server) ended(p *placement, key string) {
 	}
 	s.placesMu.Unlock()
 	p.view().set.zero()
+	s.counters.Drop(p.id)
 	for _, f := range s.endedListeners {
 		f(p.id)
+	}
+}
+
+// mergeUsed folds the unpaid use the router counted into egress's own counts
+func (s *Server) mergeUsed(p *placement, v *view) {
+	if len(v.x402.Services) > 0 {
+		s.counters.Merge(p.id, v.x402.Used)
 	}
 }
 
@@ -323,7 +348,9 @@ func (s *Server) install(p *placement, resp *routerv1.ResolveTunnelResponse) {
 	if !p.alive() {
 		return
 	}
-	p.setView(s.buildView(p, resp))
+	v := s.buildView(p, resp)
+	p.setView(v)
+	s.mergeUsed(p, v)
 	s.hold(p.id, resp)
 }
 
@@ -360,8 +387,9 @@ func (s *Server) secretsChanged(placement string) {
 
 // buildView opens the secrets of resp, keeping the ones prev already holds unchanged
 func (s *Server) buildView(p *placement, resp *routerv1.ResolveTunnelResponse) *view {
+	cfg := x402.ConfigFrom(resp.GetX402())
 	v := &view{
-		resp: resp, at: s.now(), hosts: hostSet(resp), ca: resp.GetCaVersion(),
+		resp: resp, at: s.now(), hosts: hostSet(resp, cfg), ca: resp.GetCaVersion(), x402: cfg,
 		set: &secretSet{byHash: map[[32]byte]*secret{}, headers: map[string][]string{}},
 	}
 	prev := p.view()

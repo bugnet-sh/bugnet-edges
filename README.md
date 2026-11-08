@@ -509,6 +509,28 @@ Each tunnel runs `tls.Server` with a certificate minted for the SNI, HTTP/2 or H
 - Response header values equal to a swapped value, or to a Basic credential the proxy built, are
   replaced by the placeholder.
 
+### x402 hosts
+
+A host of the placement's `ResolveTunnel` x402 block joins the SNI set whatever its row state, and
+no placeholder is swapped on it. After the `Host`, `TRACE` and `Bugnet-*` steps a request gets, in
+order:
+
+- 405 `upgrade_refused` for `Upgrade`, `Connection: upgrade`, `CONNECT` and `HTTP2-Settings`.
+- 400 `path_refused` for a target XS 6.7 refuses, 403 `path_not_enabled` outside every prefix.
+- The dummy key `Bearer x402` dropped, and a request with `PAYMENT-SIGNATURE` or `X-PAYMENT` sent
+  as is and counted `self_paid`.
+- 403 `unpaid_cap` over the request or byte cap of the host, then 429 `host_rate` with
+  `Retry-After: 10`.
+- The send through `RoundTrip` with the target byte for byte, hop-by-hop headers stripped both
+  ways and upstream `Bugnet-*` headers deleted. Bytes count as they flow, and the byte cap cuts
+  the answer with `stream_cut`.
+- A 402 passes unchanged on a self-paid request. Any other is refused with XS 6.13's body, and a
+  payable one is 503 `payments_unavailable` until the Payments call.
+
+Each request queues one event, `PlacementEnded` drops the placement's counts, and the unpaid
+deltas go out every `usage_report_interval`. `host_rate_floor_per_placement` may not exceed
+`custom_host_requests_per_minute`.
+
 ### The dialer
 
 `Dialer` resolves through `resolvers` only, never the local files. Its `Control` hook refuses

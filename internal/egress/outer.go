@@ -25,11 +25,12 @@ import (
 	"github.com/bugnet-sh/bugnet-edges/internal/strangers"
 	"github.com/bugnet-sh/bugnet-edges/internal/tlsconf"
 	"github.com/bugnet-sh/bugnet-edges/internal/traffic"
+	"github.com/bugnet-sh/bugnet-edges/internal/x402"
 )
 
 const (
-	// reporterID names this process in usage reports
-	reporterID = "egress"
+	// ReporterID names this process in usage reports
+	ReporterID = "egress"
 	// reportBytes sends a usage report at once when a placement's unsent bytes reach it
 	reportBytes = 8 << 20
 	// outerHeaderBytes bounds the upgrade request, which carries one token
@@ -56,6 +57,14 @@ type Deps struct {
 	RefreshEvery time.Duration
 	// Transport reaches upstream hosts, a transport over the refusing dialer when nil
 	Transport http.RoundTripper
+	// SellerTransport reaches x402 sellers, the x402 transport over the refusing dialer when nil
+	SellerTransport http.RoundTripper
+	// Events queues the x402 events, nothing is queued when nil
+	Events *x402.Events
+	// Counters holds the unpaid use, new counters when nil
+	Counters *x402.Counters
+	// HostRate holds the host buckets, new buckets from the settings when nil
+	HostRate *x402.HostRate
 }
 
 // Server is the egress proxy, the outer listener and the tunnels it carries
@@ -75,6 +84,10 @@ type Server struct {
 	guard        *strangers.Guard
 	m            *proxyMetrics
 	custom       *customRates
+	events       *x402.Events
+	counters     *x402.Counters
+	hostRate     *x402.HostRate
+	seller       http.RoundTripper
 
 	group   singleflight.Group
 	cacheMu sync.Mutex
@@ -131,13 +144,25 @@ func New(cfg Config, d Deps) *Server {
 	s.custom = newCustomRates(cfg.CustomHostRequestsPerMinute, d.Now)
 	s.custom.export(d.Metrics)
 	s.tr = traffic.Egress(d.Router, traffic.Settings{
-		ReporterID:          reporterID,
+		ReporterID:          ReporterID,
 		ReportInterval:      time.Duration(cfg.UsageReportInterval),
 		ReportBytes:         reportBytes,
 		TotalBytesPerSecond: int64(cfg.TotalBytesPerSecond),
 		CheckEvery:          d.CheckEvery,
 	}, s.tap, s.log)
 	s.tr.Leases.OnVersion(s.versionMoved)
+	s.events, s.counters, s.hostRate = d.Events, d.Counters, d.HostRate
+	if s.counters == nil {
+		s.counters = x402.NewCounters()
+	}
+	if s.hostRate == nil {
+		s.hostRate = x402.NewHostRate(cfg.CustomHostRequestsPerMinute,
+			cfg.X402.HostRateFloorPerPlacement, d.Now)
+	}
+	s.seller = d.SellerTransport
+	if s.seller == nil {
+		s.seller = s.newSellerTransport()
+	}
 	s.proxy = s.newProxy(d.Transport)
 	s.inner = s.innerServer()
 	return s

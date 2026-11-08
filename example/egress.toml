@@ -31,3 +31,25 @@ custom_host_requests_per_minute = 600          # per custom host, all placements
 total_bytes_per_second = "16MiB"               # every placement together, both ways
 resolve_cache = "30s"
 usage_report_interval = "5s"
+
+[x402]
+payments_url = "https://127.0.0.1:8449"
+payments_server_name = "bugnet-payments.internal"
+payments_ca_file = "/etc/bugnet/internal-ca.pem"
+payments_client_cert_file = "/etc/bugnet/egress-x402-client.pem"
+payments_client_key_credential = "egress_x402_client_key"   # name under $CREDENTIALS_DIRECTORY
+payments_timeout = "3s"
+paid_header_timeout = "150s"
+first_header_timeout = "30s"
+body_read_timeout = "10s"
+clean_report_wait = "1s"
+replay_body_max = "1MiB"
+buffer_budget = "256MiB"
+buffer_per_placement = "4MiB"
+seller_header_max = "64KiB"
+payment_required_max = "32KiB"
+max_open_signed_per_placement = 8
+max_resends_per_payment = 3
+host_rate_floor_per_placement = 20   # a minute per placement and host, at most custom_host_requests_per_minute
+report_queue = 10000
+event_flush_interval = "2s"          # at most 2s

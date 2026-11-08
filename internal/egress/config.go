@@ -14,6 +14,7 @@ import (
 
 	"github.com/bugnet-sh/bugnet-edges/internal/hostname"
 	"github.com/bugnet-sh/bugnet-edges/internal/settings"
+	"github.com/bugnet-sh/bugnet-edges/internal/x402"
 )
 
 const letsEncrypt = "https://acme-v02.api.letsencrypt.org/directory"
@@ -62,6 +63,8 @@ type Config struct {
 	ResolveCache                settings.Duration `toml:"resolve_cache"`
 	UsageReportInterval         settings.Duration `toml:"usage_report_interval"`
 
+	X402 x402.Settings `toml:"x402"`
+
 	Token      string `toml:"-"` // BUGNET_EGRESS_TOKEN
 	FetchToken string `toml:"-"` // BUGNET_EGRESS_FETCH_TOKEN, empty turns the fetcher's entry off
 }
@@ -97,6 +100,7 @@ func Defaults() Config {
 		TotalBytesPerSecond:         16 << 20,
 		ResolveCache:                settings.Duration(30 * time.Second),
 		UsageReportInterval:         settings.Duration(5 * time.Second),
+		X402:                        x402.Defaults(),
 	}
 }
 
@@ -138,6 +142,7 @@ func (c *Config) check() error {
 		return nil
 	}
 	checks := []func() error{
+		c.checkX402,
 		func() error { return checkURL("router_url", c.RouterURL) },
 		func() error { return checkAddr("listen_addr", c.ListenAddr) },
 		func() error { return checkAddr("metrics_listen_addr", c.MetricsListenAddr) },
@@ -190,6 +195,20 @@ func (c *Config) check() error {
 		if err := check(); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+// checkX402 holds the bounds of [x402] and the one that needs a top-level key too
+func (c *Config) checkX402() error {
+	if err := c.X402.Check(); err != nil {
+		return err
+	}
+	if c.CustomHostRequestsPerMinute >= 1 &&
+		c.X402.HostRateFloorPerPlacement > c.CustomHostRequestsPerMinute {
+		return fmt.Errorf("x402.host_rate_floor_per_placement (%d) must be at most "+
+			"custom_host_requests_per_minute (%d)", c.X402.HostRateFloorPerPlacement,
+			c.CustomHostRequestsPerMinute)
 	}
 	return nil
 }
