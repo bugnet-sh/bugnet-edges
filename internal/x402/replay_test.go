@@ -416,6 +416,37 @@ func TestMarkedRoomFreedAtEnd(t *testing.T) {
 	})
 }
 
+func TestFreeOnMarkKeepsTheFirstSlot(t *testing.T) {
+	b := NewBuffers(256*mib, 4*mib)
+	in, _ := gated(t, pattern(10), nil, nil)
+	r := ReadReplay(in, mib, time.Now().Add(100*time.Millisecond))
+	r.FreeOnMark(take(t, b, "pl_a", mib))
+	second := take(t, b, "pl_b", mib)
+	r.FreeOnMark(second)
+	wait(t, r)
+	eq(t, b.Held("pl_a"), int64(10))
+	eq(t, b.Held("pl_b"), mib)
+	r.Close()
+	eq(t, b.Held("pl_a"), int64(0))
+	eq(t, b.Held("pl_b"), mib)
+	second.Free()
+	eq(t, b.Total(), int64(0))
+}
+
+func TestUnmarkedReadLeavesItsSlotToTheCaller(t *testing.T) {
+	b := NewBuffers(256*mib, 4*mib)
+	r := ReadReplay(bytes.NewReader(pattern(10)), mib, far())
+	s := take(t, b, "pl_a", mib)
+	r.FreeOnMark(s)
+	wait(t, r)
+	eq(t, r.Mark, Code(""))
+	drain(t, r.Upstream)
+	r.Close()
+	eq(t, b.Held("pl_a"), mib)
+	s.Free()
+	eq(t, b.Total(), int64(0))
+}
+
 func TestReplayWaitPrefersTheEnd(t *testing.T) {
 	r := ReadReplay(bytes.NewReader(pattern(10)), mib, far())
 	wait(t, r)

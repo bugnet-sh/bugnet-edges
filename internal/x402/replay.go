@@ -110,10 +110,14 @@ func (r *Replay) isClosed() bool {
 	}
 }
 
-// FreeOnMark frees s once the read is marked, past its kept bytes until they are sent or Close
+// FreeOnMark frees s at a mark, past its kept bytes until sent or Close, and never an unmarked s
 func (r *Replay) FreeOnMark(s *Slot) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	// a slot after the first stays the caller's to free
+	if r.slot != nil {
+		return
+	}
 	r.slot = s
 	r.release()
 }
