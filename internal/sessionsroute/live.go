@@ -112,7 +112,7 @@ func (h *Handler) watch(q *call, body []byte, seq uint32) {
 		switch {
 		case callErr == nil:
 			h.answer(q, http.StatusServiceUnavailable, busyRetry)
-		case trusted && connect.CodeOf(callErr) == connect.CodeNotFound:
+		case (trusted || h.good.has(q.sum)) && connect.CodeOf(callErr) == connect.CodeNotFound:
 			// A right key whose placement is not ready or has ended (SP 7.6)
 			h.answer(q, http.StatusNotFound, 0)
 		default:
@@ -164,7 +164,8 @@ func (h *Handler) watch(q *call, body []byte, seq uint32) {
 			}
 		case <-ended:
 			// A key the router never took counts as wrong even after the 200
-			if !trusted && !h.live.joined(s) && connect.CodeOf(callErr) == connect.CodeNotFound {
+			if connect.CodeOf(callErr) == connect.CodeNotFound && !trusted &&
+				!h.live.joined(s) && !h.good.has(q.sum) {
 				h.count(q, false)
 			}
 			return

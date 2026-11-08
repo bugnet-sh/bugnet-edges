@@ -104,6 +104,8 @@ type fakeRouter struct {
 	err error
 	// delay holds every call this long before it answers
 	delay time.Duration
+	// watchDelay holds each live call this much longer, after it is recorded
+	watchDelay time.Duration
 }
 
 func newFakeRouter() *fakeRouter {
@@ -134,7 +136,7 @@ func (f *fakeRouter) find(id, key string) (*record, error) {
 func (f *fakeRouter) GetSessionRecord(
 	ctx context.Context, req *connect.Request[routerv1.GetSessionRecordRequest],
 ) (*connect.Response[routerv1.GetSessionRecordResponse], error) {
-	if err := f.wait(ctx); err != nil {
+	if err := f.wait(ctx, 0); err != nil {
 		return nil, err
 	}
 	f.mu.Lock()
@@ -150,7 +152,7 @@ func (f *fakeRouter) GetSessionRecord(
 func (f *fakeRouter) DeleteSessionRecord(
 	ctx context.Context, req *connect.Request[routerv1.DeleteSessionRecordRequest],
 ) (*connect.Response[routerv1.DeleteSessionRecordResponse], error) {
-	if err := f.wait(ctx); err != nil {
+	if err := f.wait(ctx, 0); err != nil {
 		return nil, err
 	}
 	f.mu.Lock()
@@ -168,11 +170,14 @@ func (f *fakeRouter) WatchSessionJob(
 	ctx context.Context, req *connect.Request[routerv1.WatchSessionJobRequest],
 	stream *connect.ServerStream[routerv1.WatchSessionJobResponse],
 ) error {
-	if err := f.wait(ctx); err != nil {
+	f.mu.Lock()
+	f.watches = append(f.watches, req.Msg)
+	more := f.watchDelay
+	f.mu.Unlock()
+	if err := f.wait(ctx, more); err != nil {
 		return err
 	}
 	f.mu.Lock()
-	f.watches = append(f.watches, req.Msg)
 	_, err := f.find(req.Msg.GetId(), req.Msg.GetKey())
 	s, ok := f.live[req.Msg.GetSeq()]
 	if err == nil && !ok {
@@ -202,9 +207,9 @@ func (f *fakeRouter) WatchSessionJob(
 }
 
 // wait holds a call for the fake's delay, or until the edge ends it
-func (f *fakeRouter) wait(ctx context.Context) error {
+func (f *fakeRouter) wait(ctx context.Context, more time.Duration) error {
 	f.mu.Lock()
-	d := f.delay
+	d := f.delay + more
 	f.mu.Unlock()
 	select {
 	case <-time.After(d):
@@ -424,9 +429,11 @@ func (x *harness) post(t *testing.T, method, id, k string) reply {
 	return x.do(t, method, "/v1/s/"+id, `{"k":"`+k+`"}`, x.page())
 }
 
-// direct runs the handler on one request from addr, without a server between
+// direct runs the handler on one request from addr, without a server between, for up to 10 s
 func (x *harness) direct(method, path, body, addr string, h http.Header) *http.Response {
-	r := httptest.NewRequest(method, path, strings.NewReader(body))
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	r := httptest.NewRequestWithContext(ctx, method, path, strings.NewReader(body))
 	r.RemoteAddr = addr
 	if h != nil {
 		r.Header = h
@@ -434,6 +441,13 @@ func (x *harness) direct(method, path, body, addr string, h http.Header) *http.R
 	w := httptest.NewRecorder()
 	x.h.ServeHTTP(w, r)
 	return w.Result()
+}
+
+// joinedOf is the number of live streams counted toward record id's cap
+func (x *harness) joinedOf(id string) int {
+	x.h.live.mu.Lock()
+	defer x.h.live.mu.Unlock()
+	return len(x.h.live.byID[id])
 }
 
 // waitFor polls cond for up to 5 s

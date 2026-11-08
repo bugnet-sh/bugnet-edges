@@ -180,7 +180,7 @@ func TestLiveCaps(t *testing.T) {
 	for range 4 {
 		stops = append(stops, x.openDirect(id, "198.51.100.1:4000"))
 	}
-	waitFor(t, "four streams", func() bool { return x.router.openStreams() == 4 })
+	waitFor(t, "four streams", func() bool { return x.joinedOf(id) == 4 })
 	r := x.direct("POST", livePath(other, 1), liveBody(key, ""), "198.51.100.1:4000", x.page())
 	eq(t, r.StatusCode, 429)
 	eq(t, r.Header.Get("Retry-After"), "5")
@@ -189,11 +189,11 @@ func TestLiveCaps(t *testing.T) {
 	for i := range 4 {
 		stops = append(stops, x.openDirect(id, fmt.Sprintf("198.51.100.%d:4000", 10+i)))
 	}
-	waitFor(t, "eight streams", func() bool { return x.router.openStreams() == 8 })
+	waitFor(t, "eight streams", func() bool { return x.joinedOf(id) == 8 })
 	r = x.direct("POST", livePath(id, 1), liveBody(key, ""), "198.51.100.50:4000", x.page())
 	eq(t, r.StatusCode, 429)
 	stops = append(stops, x.openDirect(other, "198.51.100.50:4000"))
-	waitFor(t, "a stream of another record", func() bool { return x.router.openStreams() == 9 })
+	waitFor(t, "a stream of another record", func() bool { return x.joinedOf(other) == 1 })
 	_, _, watches := x.router.counts()
 	eq(t, watches, 9)
 
@@ -324,7 +324,7 @@ func TestWrongKeyOnAFullRecordIs404(t *testing.T) {
 	for i := range 8 {
 		stops = append(stops, x.openDirect(id, fmt.Sprintf("198.51.100.%d:4000", 10+i)))
 	}
-	waitFor(t, "eight streams", func() bool { return x.router.openStreams() == 8 })
+	waitFor(t, "eight streams", func() bool { return x.joinedOf(id) == 8 })
 	// A wrong key learns nothing of the record, full or not
 	r := x.direct("POST", livePath(id, 1), liveBody(newKey(), ""), "203.0.113.5:4000", x.page())
 	eq(t, r.StatusCode, 404)
@@ -358,4 +358,27 @@ func TestLiveNotFoundForARightKeyKeepsItRight(t *testing.T) {
 	eq(t, fmt.Sprint(ids, offenders), "0 0")
 	eq(t, x.h.good.has(sha256.Sum256([]byte(id+"\x00"+key))), true)
 	eq(t, x.post(t, "POST", id, key).StatusCode, 200)
+}
+
+func TestLiveNotFoundForAPairThatTurnedRight(t *testing.T) {
+	// Before the 200 and after it, a pair the router took meanwhile is never counted
+	for firstFrame, want := range map[time.Duration]int{2 * time.Second: 404,
+		50 * time.Millisecond: 200} {
+		x := newHarness(t, func(o *Options) { o.FirstFrame = firstFrame })
+		x.router.set(func(f *fakeRouter) { f.watchDelay = 500 * time.Millisecond })
+		done := make(chan int)
+		go func() {
+			done <- x.direct("POST", livePath(id, 7), liveBody(key, ""), "198.51.100.1:1",
+				x.page()).StatusCode
+		}()
+		waitFor(t, "the live call to reach the router", func() bool {
+			_, _, watches := x.router.counts()
+			return watches == 1
+		})
+		eq(t, x.post(t, "POST", id, key).StatusCode, 200)
+		eq(t, <-done, want)
+		ids, offenders := x.h.ids.size()
+		eq(t, fmt.Sprint(firstFrame, ids, offenders), fmt.Sprint(firstFrame, 0, 0))
+		eq(t, x.h.good.has(sha256.Sum256([]byte(id+"\x00"+key))), true)
+	}
 }
