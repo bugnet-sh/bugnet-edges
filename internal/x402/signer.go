@@ -262,7 +262,8 @@ func (s *Signer) call(ctx context.Context, r *paymentsv1.ReportOutcomeRequest) (
 // final says Payments refused a report for good, so a retry would only fire its alarm again
 func final(err error) bool {
 	code := connect.CodeOf(err)
-	return code == connect.CodeFailedPrecondition || code == connect.CodeInvalidArgument
+	return code == connect.CodeFailedPrecondition || code == connect.CodeInvalidArgument ||
+		code == connect.CodeNotFound
 }
 
 // failure is the log fields of a failed call, which never quote text Payments sent

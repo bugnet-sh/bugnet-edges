@@ -317,6 +317,16 @@ func TestReserveQuietWhenTheCallerLeaves(t *testing.T) {
 	}
 }
 
+func TestReserveAcceptsAResendOfAnotherRef(t *testing.T) {
+	e := newSignerEnv(t)
+	s := e.signer(t)
+	first := reserveOK(t, s, "aaaaaaaaaaaaaaaa")
+	again := reserveOK(t, s, "bbbbbbbbbbbbbbbb")
+	eq(t, again.GetResend(), true)
+	eq(t, again.GetPaymentId(), first.GetPaymentId())
+	eq(t, again.GetPaymentRef(), "aaaaaaaaaaaaaaaa")
+}
+
 func TestReservePassesARefusal(t *testing.T) {
 	e := newSignerEnv(t)
 	refused := &paymentsv1.Refused{
@@ -429,6 +439,14 @@ func TestReportRefConflictNotRetried(t *testing.T) {
 				*paymentsv1.ReportOutcomeResponse, error,
 			) {
 				return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("bad hint_tx"))
+			},
+		},
+		{
+			name: "unknown payment_id", code: "not_found", answer: anyReport,
+			hook: func(context.Context, int, *paymentsv1.ReportOutcomeRequest) (
+				*paymentsv1.ReportOutcomeResponse, error,
+			) {
+				return nil, connect.NewError(connect.CodeNotFound, errors.New("no such payment"))
 			},
 		},
 		{

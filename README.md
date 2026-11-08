@@ -297,8 +297,12 @@ send the caller's token only to the router URL and never follow a redirect.
   a payload, a `payment_ref` and an amount is an error, so egress pays nothing with it.
 - The queue holds `report_queue` reports, waiting or in flight. A full queue drops the new report
   with one log line. A report that fails 4 times is dropped with one log line.
-- Payments' `FailedPrecondition` (`REF_CONFLICT`) and `InvalidArgument` are final. Each is logged
-  once and never retried, so Payments' `x402_ref_conflict` alarm fires once for one fault.
+- Payments' `FailedPrecondition` (`REF_CONFLICT`), `InvalidArgument` and `NotFound` are final.
+  Each is logged once and never retried, so Payments' `x402_ref_conflict` alarm fires once for
+  one fault. `NotFound` is an unknown `payment_id`, which no retry can find, since Payments
+  stores the row before it answers `Signed`.
+- `Reserve` accepts a `Signed` whose `payment_ref` differs from the request's `ref`, since a
+  resend carries its first row's ref.
 - A missing or unreadable file, a file with no PEM certificate or key, or a certificate for
   another key fails `NewSigner`. The error names the setting, never the path or the key.
 - No log line holds a payload, a `ref`, a `payTo`, a target or an error message Payments sent.
