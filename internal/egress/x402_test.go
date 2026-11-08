@@ -59,15 +59,15 @@ func seller(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func startX402(t *testing.T, mod func(*routerv1.X402Config)) *xenv {
+func startX402(t *testing.T, mod func(*routerv1.X402Config), opts ...option) *xenv {
 	t.Helper()
 	var ev *x402.Events
 	var counters *x402.Counters
-	h := start(t, func(_ *Config, d *Deps) {
+	h := start(t, append([]option{func(_ *Config, d *Deps) {
 		ev = x402.NewEvents(x402.EventsSend(d.Router), 20*time.Millisecond, time.Now, nil)
 		counters = x402.NewCounters()
 		d.Events, d.Counters = ev, counters
-	})
+	}}, opts...)...)
 	h.sell = seller
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
