@@ -49,6 +49,10 @@ func TestPageStatusesAndTexts(t *testing.T) {
 		{GateDown, 502, "preview service stopped. Reload in a minute", ""},
 		{RouterDown, 503, "Try again shortly", "2"},
 		{Misdirected, 421, "reached the wrong connection", ""},
+		{Revoked, 410, "This preview was turned off", ""},
+		{Forbidden, 403, "did not come from the preview page", ""},
+		{BadRequest, 400, "not one the preview can follow", ""},
+		{TooLarge, 431, "Clear the cookies of this site", ""},
 	} {
 		w := write(tc.page)
 		eq(t, w.Code, tc.status)
@@ -123,6 +127,7 @@ func TestJSONErrors(t *testing.T) {
 		{MethodNotAllowed, 405, "method", ""},
 		{ContentRange, 400, "content_range", ""},
 		{TooManyTransfers, 429, "too_many_transfers", "10"},
+		{HeadersTooLarge, 431, "headers_too_large", ""},
 	} {
 		w := writeJSON(tc.code)
 		eq(t, w.Code, tc.status)
@@ -153,7 +158,10 @@ func TestPagesNeverNameTheProvider(t *testing.T) {
 	for _, c := range allCodes() {
 		answers = append(answers, writeJSON(c))
 	}
-	answers = append(answers, landing(t, "abuse@example.test"))
+	answers = append(answers, landing(t, "abuse@example.test"), warn(Warning{
+		Started: time.Now(), Ends: time.Now(), Source: "github.com/acme/app@1a2b3c4",
+		Contact: "abuse@example.test", Token: "bnp_x", Next: "/",
+	}))
 	if len(answers) < 25 {
 		t.Fatalf("only %d answers checked", len(answers))
 	}
@@ -170,4 +178,59 @@ func TestPagesNeverNameTheProvider(t *testing.T) {
 			}
 		}
 	}
+}
+
+func warn(w Warning) *httptest.ResponseRecorder {
+	r := httptest.NewRecorder()
+	Interstitial(r, w)
+	return r
+}
+
+func TestInterstitial(t *testing.T) {
+	start := time.Date(2026, 11, 8, 10, 0, 0, 0, time.UTC)
+	w := warn(Warning{
+		Started: start, Ends: start.Add(10 * time.Minute),
+		Source: "github.com/acme/app@1a2b3c4", Contact: "https://example.test/abuse",
+		Token: "bnp_abc", Next: "/app?page=2&q=a%20b",
+	})
+	eq(t, w.Code, 200)
+	eq(t, w.Header().Get("Cache-Control"), "no-store")
+	eq(t, w.Header().Get("Referrer-Policy"), "no-referrer")
+	eq(t, w.Header().Get("X-Content-Type-Options"), "nosniff")
+	eq(t, w.Header().Get("Content-Security-Policy"), wantCSP)
+	body := w.Body.String()
+	for _, want := range []string{
+		WarningText,
+		"started 2026-11-08 10:00 UTC and ends 2026-11-08 10:10 UTC",
+		"Source: <code>github.com/acme/app@1a2b3c4</code>",
+		`<form method="post" action="/__bugnet/continue">`,
+		`name="token" value="bnp_abc"`,
+		`name="next" value="/app?page=2&amp;q=a%20b"`,
+		`<a href="https://example.test/abuse">Report abuse</a>`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("%q missing from\n%s", want, body)
+		}
+	}
+	if strings.Count(WarningText, ".") != 3 || !strings.HasPrefix(WarningText, "This page is "+
+		"served by code running in a temporary Bugnet sandbox that an anonymous user paid for.") {
+		t.Fatalf("the warning is not DP 8.2.4's: %q", WarningText)
+	}
+}
+
+func TestInterstitialSourceIsDataCutTo120(t *testing.T) {
+	w := warn(Warning{Source: "<script>alert(1)</script>\x00" + strings.Repeat("a", 200),
+		Contact: "abuse@example.test"})
+	body := w.Body.String()
+	if strings.Contains(body, "<script>") {
+		t.Fatalf("the source reached the page as markup\n%s", body)
+	}
+	if !strings.Contains(body, "&lt;script&gt;alert(1)&lt;/script&gt;"+strings.Repeat("a", 95)+
+		"</code>") {
+		t.Fatalf("the source is not cut to 120 characters\n%s", body)
+	}
+	eq(t, strings.Contains(warn(Warning{Contact: "a@example.test"}).Body.String(), "Source:"),
+		false)
+	eq(t, strings.Contains(body, `href="mailto:abuse@example.test"`), true)
+	eq(t, strings.Contains(body, "an unknown time"), true)
 }
