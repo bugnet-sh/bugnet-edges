@@ -55,7 +55,7 @@ type conn struct {
 	relays         sync.WaitGroup
 }
 
-func newConn(g *Gateway, bg context.Context, nc net.Conn, ip netip.Addr) *conn {
+func newConn(bg context.Context, g *Gateway, nc net.Conn, ip netip.Addr) *conn {
 	ctx, cancel := context.WithCancel(bg)
 	return &conn{
 		g: g, nc: nc, ip: ip, ctx: ctx, cancel: cancel,

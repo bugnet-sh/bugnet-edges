@@ -223,7 +223,7 @@ func TestGO20243321Pattern(t *testing.T) {
 	eq(t, r.router.count(&r.router.acquires), 0)
 
 	// acquire itself refuses a verified key other than the one checkKey passed
-	c := newConn(r.gw, t.Context(), nil, netipAddr())
+	c := newConn(t.Context(), r.gw, nil, netipAddr())
 	good, other := r.user.PublicKey(), newSigner(t).PublicKey()
 	c.rememberGrant(ssh.FingerprintSHA256(good), &routerv1.AuthorizeSshKeyResponse{GrantId: "g"})
 	perms := &ssh.Permissions{Extensions: map[string]string{
@@ -240,8 +240,8 @@ func TestGO20243321Pattern(t *testing.T) {
 func TestCrossSandboxRelayFails(t *testing.T) {
 	a, b := newUpSSHD(t), newUpSSHD(t)
 	r := newRig(t, func(r *rig, _ *Config) { r.up = a })
-	// Sandbox A's gate relays to B's sshd and reports B's host key. B accepts only B's own key.
-	r.router.upstream = func(req *routerv1.OpenSshUpstreamRequest, _ string) (
+	// Sandbox A's gate relays to B's sshd and reports B's host key, which takes only B's key
+	r.router.upstream = func(_ *routerv1.OpenSshUpstreamRequest, _ string) (
 		*routerv1.OpenSshUpstreamResponse, error,
 	) {
 		return &routerv1.OpenSshUpstreamResponse{
@@ -390,7 +390,9 @@ func TestDeadlineCloseAndExtension(t *testing.T) {
 		if d := time.Since(start); d < 200*time.Millisecond {
 			t.Fatalf("closed after %s, before the deadline", d)
 		}
-		waitFor(t, "a lease release", func() bool { return r.router.count(&r.router.releases) == 1 })
+		waitFor(t, "a lease release", func() bool {
+			return r.router.count(&r.router.releases) == 1
+		})
 	})
 	t.Run("an extension keeps it", func(t *testing.T) {
 		r := newRig(t)

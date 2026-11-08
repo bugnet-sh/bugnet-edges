@@ -186,7 +186,7 @@ func (g *Gateway) handle(bg context.Context, nc net.Conn) {
 		return
 	}
 	g.m.accepts.Inc("ok")
-	newConn(g, bg, nc, ip).run()
+	newConn(bg, g, nc, ip).run()
 }
 
 // addrOf is the peer's address, or the zero address when it has none

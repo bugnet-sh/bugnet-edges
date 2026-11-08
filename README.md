@@ -395,6 +395,28 @@ state of each name:
 | `edge_cert_days_left{name}` | Whole days to expiry, for the wildcard and each issued name |
 | `edge_cert_issued{name}` | 1 once the name has a certificate, 0 once its request at start failed |
 
+## bugnet-ssh
+
+`bugnet-ssh -config example/ssh.toml` is the SSH gateway of DP 9. It listens on 127.0.0.1:2223
+behind HAProxy's port 2222, PROXY v2 first. Its secret is `BUGNET_SSH_TOKEN`, and its host key is
+a systemd credential named in `host_key_credentials`. Metrics are on 9102.
+
+- The user name is the sandbox's alias. `checkKey` asks the router once for a key and caches the
+  answer for 10 s. The connection lease is taken only after the signature checks out.
+- Each placement gets its own upstream key, `HMAC-SHA256(seed, placement)`, with a seed made at
+  start. The user sent upstream is the router's, never the sandbox's.
+- Refusals show as an SSH banner. With `banner_fallback = true` the first session shows the line
+  on stderr and exits 255 instead. A sandbox whose sshd is not reachable gets that fallback too.
+- Channels follow DP 9.5. `direct-tcpip` reaches loopback only. Exit requests wait for the
+  outputs, at most two are kept. A PTY session gets one stderr line 60 s before the deadline.
+- On SIGTERM it stops accepting and keeps each session until its placement's deadline, at most
+  `drain_max`. A new process binds the same address with `SO_REUSEPORT`.
+- Bytes count toward the edge budget through `ReportSshUsage` and follow the pace it answers.
+
+The real OpenSSH tests use the host's `ssh`, `sshd` and `scp` behind a `bugnet-run gate` built
+from `../bugnet-run`, and skip when one is missing. `BUGNET_TEST_SSH_GIB=1` moves 1 GiB each way
+in `TestOpenSSHBulkRate` instead of 64 MiB.
+
 ## bugnet-certs
 
 `bugnet-certs -config FILE` runs from a systemd timer twice a day and exits. Its settings are

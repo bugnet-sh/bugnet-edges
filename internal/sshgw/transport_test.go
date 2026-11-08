@@ -149,7 +149,9 @@ func TestDrainKeepsSessionsUntilDeadline(t *testing.T) {
 }
 
 func TestDrainStopsAtDrainMax(t *testing.T) {
-	r := newRig(t, func(_ *rig, c *Config) { c.DrainMax = settings.Duration(400 * time.Millisecond) })
+	r := newRig(t, func(_ *rig, c *Config) {
+		c.DrainMax = settings.Duration(400 * time.Millisecond)
+	})
 	c := r.client()
 	start := time.Now()
 	r.cancel()
