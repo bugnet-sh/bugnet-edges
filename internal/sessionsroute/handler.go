@@ -67,6 +67,9 @@ type Options struct {
 	FirstFrame time.Duration
 
 	Log *slog.Logger
+
+	// now is the per-id limit's clock, time.Now when nil
+	now func() time.Time
 }
 
 func (o *Options) defaults() {
@@ -108,7 +111,7 @@ func New(
 		router: router, newCall: newCall, o: o,
 		perIP: strangers.NewPerIP(o.RequestsPerMinute),
 		ips:   strangers.NewGuard(o.KeyFailuresPerMinute, strangers.Mark, strangers.Unknown),
-		ids:   newIDGuard(o.IDFailuresPerMinute),
+		ids:   newIDGuard(o.IDFailuresPerMinute, o.now),
 		good:  newGoodPairs(),
 		live:  newStreams(o.LivePerRecord, o.LivePerIP, o.LiveMax),
 	}
@@ -323,7 +326,9 @@ type pageBody struct {
 func (h *Handler) admit(q *call, body []byte) (pageBody, bool) {
 	var b pageBody
 	if json.Unmarshal(body, &b) != nil || !keyShape.MatchString(b.K) {
-		h.unknown(q, false)
+		// No router call, so the id's count is left alone
+		h.ips.Failed(q.ip)
+		h.answerUnknown(q)
 		return b, false
 	}
 	q.sum = sha256.Sum256([]byte(q.id + "\x00" + b.K))
@@ -334,7 +339,7 @@ func (h *Handler) admit(q *call, body []byte) (pageBody, bool) {
 		h.unknown(q, false)
 		return b, false
 	}
-	if h.ips.Marked(q.ip) && !h.ips.MayAsk(q.ip) || !h.ids.mayAsk(q.id) {
+	if h.ips.Marked(q.ip) && !h.ips.MayAsk(q.ip) || !h.ids.mayAsk(q.id, q.ip) {
 		h.answer(q, http.StatusTooManyRequests, strangers.AskEvery)
 		return b, false
 	}
@@ -343,12 +348,22 @@ func (h *Handler) admit(q *call, body []byte) (pageBody, bool) {
 
 // unknown answers an unknown id or a wrong key alike and counts it against the address and id
 func (h *Handler) unknown(q *call, remember bool) {
+	h.count(q, remember)
+	h.answerUnknown(q)
+}
+
+// count counts a wrong key against the address and the id, remember caching the pair for 10 s
+func (h *Handler) count(q *call, remember bool) {
 	if remember {
 		h.ips.RememberUnknown(q.sum)
 	}
 	h.good.remove(q.sum)
 	h.ips.Failed(q.ip)
-	h.ids.failed(q.id)
+	h.ids.failed(q.id, q.ip)
+}
+
+// answerUnknown is 404, or 429 for 10 minutes once the address is marked
+func (h *Handler) answerUnknown(q *call) {
 	if h.ips.Marked(q.ip) {
 		h.answer(q, http.StatusTooManyRequests, strangers.Mark)
 		return

@@ -6,9 +6,11 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -376,33 +378,70 @@ func TestWrongKeysPerIP(t *testing.T) {
 
 func TestWrongKeysPerID(t *testing.T) {
 	x := newHarness(t)
-	// Each wrong key from its own address, so only the id's count fills
 	ask := func(i int, k string) *http.Response {
 		return x.direct("POST", "/v1/s/"+id, `{"k":"`+k+`"}`,
 			fmt.Sprintf("198.51.100.%d:4000", i), x.page())
 	}
+	// Each wrong key from its own address, so only the id's count fills
 	for i := range 21 {
 		eq(t, fmt.Sprint(i, ask(i, newKey()).StatusCode), fmt.Sprint(i, 404))
 	}
 	gets, _, _ := x.router.counts()
 	eq(t, gets, 21)
-	r := ask(30, newKey())
+
+	// An address that sent the hot id a wrong key shares one call a second
+	r := ask(5, newKey())
 	eq(t, r.StatusCode, 429)
 	eq(t, r.Header.Get("Retry-After"), "1")
-	eq(t, ask(31, key).StatusCode, 429)
+	eq(t, ask(6, key).StatusCode, 429)
 	g, _, _ := x.router.counts()
 	eq(t, g, gets)
 
-	// A second later one call goes through, and the right key it carries is then never blocked
+	// An address with no wrong key for the id is never held by it (S2a)
+	eq(t, ask(60, newKey()).StatusCode, 404)
+	eq(t, ask(61, key).StatusCode, 200)
+
+	// A second later one offender's call goes through, and the right key the router took is
+	// never blocked even from an offender
 	time.Sleep(1100 * time.Millisecond)
-	eq(t, ask(32, key).StatusCode, 200)
-	eq(t, ask(33, newKey()).StatusCode, 429)
+	eq(t, ask(8, newKey()).StatusCode, 404)
+	eq(t, ask(9, newKey()).StatusCode, 429)
 	for i := range 3 {
-		eq(t, ask(40+i, key).StatusCode, 200)
+		eq(t, ask(i, key).StatusCode, 200)
 	}
 	// Another id is not limited
-	r = x.direct("POST", "/v1/s/"+newID(), `{"k":"`+key+`"}`, "198.51.100.50:4000", x.page())
+	r = x.direct("POST", "/v1/s/"+newID(), `{"k":"`+key+`"}`, "198.51.100.1:4000", x.page())
 	eq(t, r.StatusCode, 404)
+}
+
+func TestMalformedKeysMakeNoIDEntries(t *testing.T) {
+	x := newHarness(t)
+	for i, body := range []string{`{"k":"bnk_short"}`, `not json`, `{}`} {
+		r := x.direct("POST", "/v1/s/"+newID(), body, fmt.Sprintf("198.51.100.%d:1", i),
+			x.page())
+		eq(t, r.StatusCode, 404)
+	}
+	ids, offenders := x.h.ids.size()
+	eq(t, fmt.Sprint(ids, offenders), "0 0")
+	eq(t, x.post(t, "POST", newID(), key).StatusCode, 404)
+	ids, offenders = x.h.ids.size()
+	eq(t, fmt.Sprint(ids, offenders), "1 1")
+}
+
+func TestIDTablesStayBounded(t *testing.T) {
+	clock := &fakeClock{t: time.Now()}
+	g := newIDGuard(20, clock.now)
+	ip := netip.MustParseAddr("198.51.100.1")
+	for i := range maxIDs + 10 {
+		g.failed(fmt.Sprintf("id%d", i), ip)
+	}
+	ids, offenders := g.size()
+	eq(t, ids <= maxIDs && offenders <= maxOffenders, true)
+	// Past idHot the expired entries give way before any live one
+	clock.advance(2 * idHot)
+	g.failed("fresh", ip)
+	ids, offenders = g.size()
+	eq(t, fmt.Sprint(ids, offenders), "1 1")
 }
 
 func TestIPv6CountsBy64(t *testing.T) {
@@ -473,5 +512,54 @@ func TestLogsNeverTheKey(t *testing.T) {
 	}
 	if bytes.Count([]byte(logs), []byte("session=")) < 5 {
 		t.Fatalf("calls without their session hash\n%s", logs)
+	}
+}
+
+// fakeClock is a clock a test moves by hand
+type fakeClock struct {
+	mu sync.Mutex
+	t  time.Time
+}
+
+func (c *fakeClock) now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.t
+}
+
+func (c *fakeClock) advance(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.t = c.t.Add(d)
+}
+
+func TestHotIDNeverStarvesAFreshRightKey(t *testing.T) {
+	clock := &fakeClock{t: time.Now()}
+	x := newHarness(t, func(o *Options) {
+		o.KeyFailuresPerMinute = 0
+		o.now = clock.now
+	})
+	const stranger = "198.51.100.1:4000"
+	ask := func(k, addr string) *http.Response {
+		return x.direct("POST", "/v1/s/"+id, `{"k":"`+k+`"}`, addr, x.page())
+	}
+	// Twenty wrong keys from twenty addresses make the id hot at once
+	for i := range 20 {
+		eq(t, ask(newKey(), fmt.Sprintf("198.51.100.%d:4000", 100+i)).StatusCode, 404)
+	}
+	for sec := range 30 {
+		clock.advance(time.Second)
+		eq(t, fmt.Sprint(sec, ask(newKey(), stranger).StatusCode), fmt.Sprint(sec, 404))
+		if sec == 0 {
+			continue
+		}
+		// The stranger is held to its one call a second
+		r := ask(newKey(), stranger)
+		eq(t, r.StatusCode, 429)
+		eq(t, r.Header.Get("Retry-After"), "1")
+		if sec == 25 {
+			// An address with no wrong key for the id gets through on its first try
+			eq(t, ask(key, "203.0.113.9:4000").StatusCode, 200)
+		}
 	}
 }
