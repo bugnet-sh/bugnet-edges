@@ -93,6 +93,17 @@ jobs:
           version: v2.14.0
           working-directory: bugnet-edges
 
+      # The sshgw tests' sshd_config names sftp-server at its macOS path
+      - name: Link sftp-server
+        run: |
+          set -euo pipefail
+          sudo mkdir -p /usr/libexec
+          sudo ln -sf /usr/lib/openssh/sftp-server /usr/libexec/sftp-server
+
+      # The transfer tests' 16 KiB client buffer resumes promptly only under an MSS below it
+      - name: Set the loopback MTU to 1500
+        run: sudo ip link set dev lo mtu 1500
+
       - name: go test
         run: |
           set -euo pipefail
@@ -105,6 +116,7 @@ jobs:
           set -euo pipefail
           log="$RUNNER_TEMP/go-test.log"
           [ -f "$log" ] || exit 0
-          { grep -E -A 25 -- '--- FAIL|^panic:|^FAIL' "$log" || true; } | head -300 \
+          { grep -v -E '^(ok|\?) ' "$log" | grep -E -A 25 -- '--- FAIL|^panic:|^FAIL' || true; } \
+            | head -300 \
             | sed 's/%/%25/g' | awk '{ printf "%s%%0A", $0 }' > "$RUNNER_TEMP/failures"
           echo "::error title=go test failures::$(cat "$RUNNER_TEMP/failures")"
