@@ -102,17 +102,6 @@ jobs:
           version: v2.14.0
           working-directory: bugnet-edges
 
-      # The sshgw tests' sshd_config names sftp-server at its macOS path
-      - name: Link sftp-server
-        run: |
-          set -euo pipefail
-          sudo mkdir -p /usr/libexec
-          sudo ln -sf /usr/lib/openssh/sftp-server /usr/libexec/sftp-server
-
-      # The transfer tests' 16 KiB client buffer resumes promptly only under an MSS below it
-      - name: Set the loopback MTU to 1500
-        run: sudo ip link set dev lo mtu 1500
-
       - name: go test
         run: |
           set -euo pipefail
