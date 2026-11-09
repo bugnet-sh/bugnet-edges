@@ -115,7 +115,7 @@ func TestControlHookRefusesWhateverTheNameLedTo(t *testing.T) {
 
 func TestPublicAddressesAreNotRefused(t *testing.T) {
 	for _, a := range []string{"93.184.216.34", "8.8.8.8", "2606:4700:4700::1111", "172.32.0.1"} {
-		eq(t, Refused(netip.MustParseAddr(a)), false)
+		eq(t, RefusedIP(netip.MustParseAddr(a)), false)
 	}
 }
 

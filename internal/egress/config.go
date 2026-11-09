@@ -61,6 +61,7 @@ type Config struct {
 	CustomHostRequestsPerMinute int               `toml:"custom_host_requests_per_minute"`
 	TotalBytesPerSecond         settings.Bytes    `toml:"total_bytes_per_second"`
 	ResolveCache                settings.Duration `toml:"resolve_cache"`
+	SourceRecheck               settings.Duration `toml:"source_recheck"`
 	UsageReportInterval         settings.Duration `toml:"usage_report_interval"`
 
 	X402 x402.Settings `toml:"x402"`
@@ -102,6 +103,7 @@ func Defaults() Config {
 		CustomHostRequestsPerMinute: 600,
 		TotalBytesPerSecond:         16 << 20,
 		ResolveCache:                settings.Duration(30 * time.Second),
+		SourceRecheck:               settings.Duration(10 * time.Second),
 		UsageReportInterval:         settings.Duration(5 * time.Second),
 		X402:                        x402.Defaults(),
 	}
@@ -186,6 +188,7 @@ func (c *Config) check() error {
 			for k, d := range map[string]settings.Duration{
 				"tunnel_idle_timeout": c.TunnelIdleTimeout, "handshake_timeout": c.HandshakeTimeout,
 				"resolve_cache": c.ResolveCache, "usage_report_interval": c.UsageReportInterval,
+				"source_recheck": c.SourceRecheck,
 			} {
 				if d <= 0 {
 					return fmt.Errorf("%s must be more than 0", k)

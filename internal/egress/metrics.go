@@ -19,6 +19,7 @@ type proxyMetrics struct {
 	refusedSNI    *metrics.Counter
 	bytes         *metrics.Counter
 	requests      *metrics.Counter
+	sources       *metrics.Counter
 }
 
 func newProxyMetrics(r *metrics.Registry) *proxyMetrics {
@@ -31,6 +32,8 @@ func newProxyMetrics(r *metrics.Registry) *proxyMetrics {
 		bytes: r.Counter("egress_tunnel_bytes_total", "Bytes carried by tunnels", "direction"),
 		requests: r.Counter("egress_requests_total", "Requests served inside tunnels",
 			"kind", "status", "swapped"),
+		sources: r.Counter("egress_tunnel_sources_total",
+			"Tunnels judged against the sandbox's reported address", "verdict"),
 	}
 }
 

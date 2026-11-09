@@ -332,6 +332,12 @@ func (s *Server) outerServer() *http.Server {
 		IdleTimeout:       idleTimeout,
 		MaxHeaderBytes:    outerHeaderBytes,
 		ErrorLog:          s.errorLog(),
+		ConnContext: func(ctx context.Context, c net.Conn) context.Context {
+			if tc, ok := c.(*tls.Conn); ok {
+				c = tc.NetConn()
+			}
+			return context.WithValue(ctx, proxySourceKey{}, proxyproto.Source(c))
+		},
 	}
 }
 

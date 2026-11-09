@@ -106,3 +106,27 @@ func (c *conn) WriteTo(w io.Writer) (int64, error) {
 	n, err := c.Conn.WriteTo(w)
 	return n, c.check(err)
 }
+
+// Source is the client side of c as HAProxy saw it, unmapped. It is invalid when c carried
+// a LOCAL header or no TCP address
+func Source(c net.Conn) netip.Addr {
+	var h *pp.Header
+	switch v := c.(type) {
+	case *conn:
+		h = v.ProxyHeader()
+	case *pp.Conn:
+		h = v.ProxyHeader()
+	}
+	if h == nil || h.Command.IsLocal() {
+		return netip.Addr{}
+	}
+	tcp, ok := h.SourceAddr.(*net.TCPAddr)
+	if !ok || tcp == nil {
+		return netip.Addr{}
+	}
+	a, ok := netip.AddrFromSlice(tcp.IP)
+	if !ok {
+		return netip.Addr{}
+	}
+	return a.Unmap()
+}

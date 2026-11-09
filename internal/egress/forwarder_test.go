@@ -71,14 +71,13 @@ func (h *harness) proxyFront(t *testing.T) string {
 	return ln.Addr().String()
 }
 
-// TestRealForwarderThroughRealProxy runs bugnet-run forward against the real proxy
-func TestRealForwarderThroughRealProxy(t *testing.T) {
+// startRealForwarder runs bugnet-run forward for p through front, with extra config fields
+func startRealForwarder(
+	t *testing.T, h *harness, p *fakePlacement, front string, extra map[string]any,
+) (string, *logBuffer) {
+	t.Helper()
 	runner := buildRunner(t)
-	h := start(t)
-	p, ph := hfPlacement(t, h)
-	front := h.proxyFront(t)
 	_, port, _ := net.SplitHostPort(front)
-
 	root := t.TempDir()
 	etc := filepath.Join(root, "etc", "bugnet")
 	if err := os.MkdirAll(etc, 0o755); err != nil {
@@ -91,11 +90,15 @@ func TestRealForwarderThroughRealProxy(t *testing.T) {
 	writeFile(t, filepath.Join(etc, "roots.pem"), string(pemBytes), 0o644)
 	writeFile(t, filepath.Join(etc, "egress.token"), p.token+"\n", 0o600)
 	portNum, _ := strconv.Atoi(port)
-	conf, _ := json.Marshal(map[string]any{
+	fields := map[string]any{
 		"endpoint": egressHost, "ips": []string{"127.0.0.1"}, "port": portNum,
 		"listen": "127.0.0.1:0", "token_file": "/etc/bugnet/egress.token",
 		"hosts": []string{"hf.example"}, "roots_file": "/etc/bugnet/roots.pem",
-	})
+	}
+	for k, v := range extra {
+		fields[k] = v
+	}
+	conf, _ := json.Marshal(fields)
 	cfg := filepath.Join(etc, "egress.json")
 	writeFile(t, cfg, string(conf), 0o644)
 
@@ -117,7 +120,11 @@ func TestRealForwarderThroughRealProxy(t *testing.T) {
 		listen = strings.TrimSpace(string(b))
 		return err == nil && listen != ""
 	})
+	return listen, stderr
+}
 
+// getThrough asks hf.example/echo through the forwarder at listen with the placeholder ph
+func getThrough(h *harness, listen, ph string) (*http.Response, error) {
 	tr := &http.Transport{
 		DialTLSContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 			var d net.Dialer
@@ -132,11 +139,20 @@ func TestRealForwarderThroughRealProxy(t *testing.T) {
 			}
 			return tc, nil
 		},
+		DisableKeepAlives: true,
 	}
 	defer tr.CloseIdleConnections()
 	req, _ := http.NewRequest(http.MethodGet, "https://hf.example/echo", nil)
 	req.Header.Set("Authorization", "Bearer "+ph)
-	resp, err := (&http.Client{Transport: tr, Timeout: 2 * shortWait}).Do(req)
+	return (&http.Client{Transport: tr, Timeout: 2 * shortWait}).Do(req)
+}
+
+// TestRealForwarderThroughRealProxy runs bugnet-run forward against the real proxy
+func TestRealForwarderThroughRealProxy(t *testing.T) {
+	h := start(t)
+	p, ph := hfPlacement(t, h)
+	listen, stderr := startRealForwarder(t, h, p, h.proxyFront(t), nil)
+	resp, err := getThrough(h, listen, ph)
 	if err != nil {
 		t.Fatalf("%v\nforwarder: %s\nproxy: %s", err, stderr.String(), h.log.String())
 	}
@@ -148,6 +164,40 @@ func TestRealForwarderThroughRealProxy(t *testing.T) {
 	// The upstream echoed the real value and the response carries the placeholder back
 	eq(t, resp.Header.Get("X-Echo"), "Bearer "+ph)
 	eq(t, strings.Contains(stderr.String(), "hf_secret"), false)
+}
+
+// TestRealForwarderBoundSourceEnforce runs the forwarder with a family and a bind in enforce mode
+func TestRealForwarderBoundSourceEnforce(t *testing.T) {
+	h := start(t)
+	p, ph := hfPlacement(t, h)
+	h.router.setCheck(p, enforce("127.0.0.1/32"))
+	front := h.proxyFront(t)
+	bound := map[string]any{"family": "ipv4", "bind": "127.0.0.1"}
+
+	// The front reports the address the forwarder dialled from, which the prefix holds
+	listen, stderr := startRealForwarder(t, h, p, front, bound)
+	resp, err := getThrough(h, listen, ph)
+	if err != nil {
+		t.Fatalf("%v\nforwarder: %s\nproxy: %s", err, stderr.String(), h.log.String())
+	}
+	_ = resp.Body.Close()
+	eq(t, resp.StatusCode, 200)
+	eq(t, h.router.sourceResolves() >= 1, true)
+
+	// A prefix that does not hold it refuses the same forwarder at the upgrade
+	h.router.setCheck(p, enforce("203.0.113.5/32"))
+	h.server.secretsChanged(p.id.String())
+	within(t, "the placement to follow the new check", func() bool {
+		h.server.placesMu.Lock()
+		v := h.server.places[p.id.String()+"/tunnel"].view()
+		h.server.placesMu.Unlock()
+		return len(v.src.Prefixes) == 1 && v.src.Prefixes[0].String() == "203.0.113.5/32"
+	})
+	if resp, err := getThrough(h, listen, ph); err == nil {
+		_ = resp.Body.Close()
+		t.Fatal("a refused source still got through")
+	}
+	eq(t, strings.Contains(h.log.String(), "tunnel_source_refused"), true)
 }
 
 func writeFile(t *testing.T, path, body string, mode os.FileMode) {

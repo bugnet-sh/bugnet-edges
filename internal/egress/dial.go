@@ -46,8 +46,8 @@ func prefixes(list ...string) []netip.Prefix {
 	return out
 }
 
-// Refused says whether the proxy may never connect to ip, whatever name led to it
-func Refused(ip netip.Addr) bool {
+// RefusedIP says whether the proxy may never connect to ip, whatever name led to it
+func RefusedIP(ip netip.Addr) bool {
 	ip = ip.Unmap().WithZone("")
 	if !ip.IsValid() {
 		return true
@@ -79,7 +79,7 @@ func NewDialer(resolvers []string) *Dialer {
 	return &Dialer{resolvers: resolvers, now: time.Now, ownAddrs: net.InterfaceAddrs}
 }
 
-// DialContext connects to addr, a host and port, refusing every address Refused names
+// DialContext connects to addr, a host and port, refusing every address RefusedIP names
 func (d *Dialer) DialContext(ctx context.Context, network, addr string) (net.Conn, error) {
 	host, port, err := net.SplitHostPort(addr)
 	if err != nil {
@@ -135,7 +135,7 @@ func (d *Dialer) control(_, address string, _ syscall.RawConn) error {
 }
 
 func (d *Dialer) refuses(ip netip.Addr) bool {
-	return Refused(ip) || d.isOwn(ip.Unmap())
+	return RefusedIP(ip) || d.isOwn(ip.Unmap())
 }
 
 // isOwn says whether ip is an address of this host, read again every minute

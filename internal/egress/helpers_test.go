@@ -172,6 +172,10 @@ type fakeRouter struct {
 	events     chan *routerv1.EdgeEvent
 	x402Events []*routerv1.X402Event
 	unpaid     map[string]*routerv1.X402Unpaid
+	// sources holds the source_ip of each resolve that sent one, oldest first
+	sources []string
+	// onSource runs under the lock for a resolve that sent a source_ip, before it answers
+	onSource func(p *fakePlacement, src string)
 }
 
 func newFakeRouter() *fakeRouter {
@@ -255,6 +259,12 @@ func (r *fakeRouter) ResolveTunnel(
 	switch c := req.Msg.GetCaller().(type) {
 	case *routerv1.ResolveTunnelRequest_TokenSha256:
 		p = r.byToken[[32]byte(c.TokenSha256)]
+		if ip := req.Msg.GetSourceIp(); ip != "" {
+			r.sources = append(r.sources, ip)
+			if r.onSource != nil && p != nil {
+				r.onSource(p, ip)
+			}
+		}
 	case *routerv1.ResolveTunnelRequest_FetchPlacementId:
 		p, fetch = r.byID[c.FetchPlacementId], true
 	}
@@ -343,6 +353,20 @@ func (r *fakeRouter) WatchEgressEvents(
 			return nil
 		}
 	}
+}
+
+// sourceResolves is how many resolves sent a source_ip
+func (r *fakeRouter) sourceResolves() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.sources)
+}
+
+// setCheck changes the source_check the next answers carry
+func (r *fakeRouter) setCheck(p *fakePlacement, c *routerv1.TunnelSourceCheck) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	p.resp.SourceCheck = c
 }
 
 func (r *fakeRouter) resolveCount() int {

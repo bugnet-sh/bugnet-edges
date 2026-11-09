@@ -30,6 +30,7 @@ fetch_sources = ["127.0.0.1/32", "::1/128"]    # PROXY v2 sources that may send 
 custom_host_requests_per_minute = 600          # per custom host, all placements together
 total_bytes_per_second = "16MiB"               # every placement together, both ways
 resolve_cache = "30s"
+source_recheck = "10s"                         # least time between forced source resolves
 usage_report_interval = "5s"
 
 [x402]
