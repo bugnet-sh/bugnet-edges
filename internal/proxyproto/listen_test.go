@@ -248,3 +248,48 @@ func TestListenRefusesBadPrefixes(t *testing.T) {
 	_, err := Listen("127.0.0.1:0", []netip.Prefix{{}})
 	eq(t, err != nil, true)
 }
+
+func TestProxySource(t *testing.T) {
+	v6 := func(src string) []byte {
+		from := net.TCPAddrFromAddrPort(netip.MustParseAddrPort(src))
+		to := &net.TCPAddr{IP: net.ParseIP("2001:db8::1"), Port: 443}
+		b, err := pp.HeaderProxyFromAddrs(2, from, to).Format()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return b
+	}
+	local, err := (&pp.Header{Version: 2, Command: pp.LOCAL}).Format()
+	if err != nil {
+		t.Fatal(err)
+	}
+	unspec := []byte("\r\n\r\n\x00\r\nQUIT\n\x21\x00\x00\x00")
+	cases := []struct {
+		name string
+		head []byte
+		want string
+	}{
+		{"v4", withHeader(t, "203.0.113.10:5000"), "203.0.113.10"},
+		{"v6", v6("[2001:db8::5]:5000"), "2001:db8::5"},
+		{"mapped", v6("[::ffff:203.0.113.10]:5000"), "203.0.113.10"},
+		{"local", local, ""},
+		{"unspec", unspec, ""},
+	}
+	for _, tc := range cases {
+		ln := mustListen(t, loopback)
+		dial(t, ln, tc.head)
+		c := accept(t, ln)
+		// The library refuses an UNSPEC header, so its read fails and no source is left
+		_, err := io.ReadFull(c, make([]byte, 1))
+		if err != nil && tc.name != "unspec" {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		got := Source(c)
+		if tc.want == "" {
+			eq(t, got.IsValid(), false)
+			continue
+		}
+		eq(t, got.String(), tc.want)
+	}
+	eq(t, Source(nil).IsValid(), false)
+}

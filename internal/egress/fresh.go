@@ -70,6 +70,8 @@ type view struct {
 	set   *secretSet
 	ca    uint32
 	x402  x402.Config
+	// src is the answer's source_check
+	src SourceCheck
 }
 
 // placement is one placement's proxy state for one kind of caller, a sandbox or the fetcher
@@ -89,6 +91,10 @@ type placement struct {
 	attemptAt  time.Time
 	refreshing chan struct{}
 	tunnels    int
+	// forcedAt is when a tunnel's source last made a forced resolve
+	forcedAt time.Time
+	// open holds the tunnels that carry their source, so a moved check can close them
+	open map[*openTunnel]struct{}
 }
 
 func (p *placement) alive() bool {
@@ -287,7 +293,7 @@ func (s *Server) place(
 			flight = defaultInFlight
 		}
 		p = &placement{
-			s: s, id: resp.GetPlacementId(), uid: uid, fetch: fetch, caller: req,
+			s: s, id: resp.GetPlacementId(), uid: uid, fetch: fetch, caller: withoutSource(req),
 			short:  hex.EncodeToString(sum[:4]),
 			flight: make(chan struct{}, flight),
 		}
@@ -350,9 +356,13 @@ func (s *Server) install(p *placement, resp *routerv1.ResolveTunnelResponse) {
 		return
 	}
 	v := s.buildView(p, resp)
+	was := p.view()
 	p.setView(v)
 	s.mergeUsed(p, v)
 	s.hold(p.id, resp)
+	if was != nil && !was.src.same(v.src) {
+		p.closeRefused(v.src)
+	}
 }
 
 // versionMoved drops the secrets of every kind of caller of a placement whose version moved
@@ -391,6 +401,7 @@ func (s *Server) buildView(p *placement, resp *routerv1.ResolveTunnelResponse) *
 	cfg := x402.ConfigFrom(resp.GetX402())
 	v := &view{
 		resp: resp, at: s.now(), hosts: hostSet(resp, cfg), ca: resp.GetCaVersion(), x402: cfg,
+		src: ParseSourceCheck(resp.GetSourceCheck()),
 		set: &secretSet{byHash: map[[32]byte]*secret{}, headers: map[string][]string{}},
 	}
 	prev := p.view()

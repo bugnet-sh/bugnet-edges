@@ -479,7 +479,8 @@ upgrade and the `bugnet-tunnel.v1` subprotocol is the one path. Everything else 
 
 | Token | Source | Answer |
 | --- | --- | --- |
-| `bnt_` that resolves | any | 101 |
+| `bnt_` that resolves, source admitted or unchecked | any | 101 |
+| `bnt_` that resolves, source refused in `enforce` mode | any | 403, no body |
 | `bnt_` unknown, ended or not ready | any | 401, counted against the source |
 | Past `token_failures_per_minute` from one source | any | 429 `Retry-After: 600` |
 | A marked source that asked the router within 1 s | any | 429 `Retry-After: 1` |
@@ -490,6 +491,31 @@ upgrade and the `bugnet-tunnel.v1` subprotocol is the one path. Everything else 
 
 A token that resolves is cached for `resolve_cache` (30 s), and an unknown one for 10 s. Tunnels
 already open keep running while the router is down.
+
+### Source check
+
+Every `ResolveTunnel` call for a `bnt_` token carries `source_ip`, the client address from
+HAProxy's PROXY v2 header, unmapped. The answer's `source_check` holds a mode and at most one
+masked prefix. Before a tunnel takes a slot, the proxy judges its source.
+
+| Verdict | When | Effect |
+| --- | --- | --- |
+| `unchecked` | The mode is unspecified | Served |
+| `admitted` | A prefix holds the source | Served |
+| `unmatched` | `report` mode, no prefix holds it | Served, logged as `tunnel_source_unmatched` |
+| `refused` | `enforce` mode, no prefix holds it | 403 with no body, `tunnel_source_refused` |
+
+- A source that is not admitted makes one forced `ResolveTunnel` with `source_ip`, past the cache
+  and within 5 s, then is judged again. A placement forces at most one every `source_recheck`
+  (10 s), so the router can follow a moved address within the same upgrade.
+- A refused tunnel takes no slot and counts as one failure for its source in
+  `token_failures_per_minute`.
+- A prefix that does not parse is dropped, which can only refuse more. An invalid source, such as
+  a LOCAL header, falls in no prefix.
+- When a placement's check changes, `enforce` mode closes its open tunnels whose source the new
+  check refuses. `report` mode keeps them.
+- `bnf_` tunnels are never judged.
+- The source address appears only in the two log lines, beside the hash of the placement id.
 
 ### Inner TLS and requests
 
@@ -570,6 +596,7 @@ body.
 | --- | --- |
 | `egress_tunnels` | Tunnels open now |
 | `egress_tunnel_refused_total{status}` | Upgrades refused |
+| `egress_tunnel_sources_total{verdict}` | Tunnels judged, by verdict |
 | `egress_inner_handshakes_refused_total` | Inner handshakes refused for their name |
 | `egress_tunnel_bytes_total{direction}` | Tunnel bytes, `in` toward the sandbox |
 | `egress_requests_total{kind,status,swapped}` | Requests inside tunnels |

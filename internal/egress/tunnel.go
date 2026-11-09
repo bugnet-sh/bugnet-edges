@@ -18,6 +18,7 @@ import (
 	"github.com/coder/websocket"
 	"github.com/google/uuid"
 	"google.golang.org/genproto/googleapis/rpc/errdetails"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/bugnet-sh/bugnet-edges/internal/hostname"
 	"github.com/bugnet-sh/bugnet-edges/internal/lease"
@@ -53,6 +54,15 @@ func headerHas(h http.Header, name, token string) bool {
 		}
 	}
 	return false
+}
+
+// proxySourceKey keys the client address HAProxy saw, put in each request's context
+type proxySourceKey struct{}
+
+// proxySourceOf is the client address of r's connection from its PROXY header, invalid without one
+func proxySourceOf(r *http.Request) netip.Addr {
+	a, _ := r.Context().Value(proxySourceKey{}).(netip.Addr)
+	return a
 }
 
 func sourceOf(r *http.Request) netip.Addr {
@@ -100,6 +110,9 @@ func (s *Server) handleTunnel(w http.ResponseWriter, r *http.Request) {
 		s.refuse(w, deny)
 		return
 	}
+	if !p.fetch && !s.admitSource(w, r, p, src) {
+		return
+	}
 	if !s.minter.Has(p.view().ca) {
 		s.refuse(w, denial{status: http.StatusServiceUnavailable})
 		return
@@ -123,7 +136,24 @@ func (s *Server) handleTunnel(w http.ResponseWriter, r *http.Request) {
 	ws.SetReadLimit(maxFrame)
 	s.m.tunnels.Add(1)
 	defer s.m.tunnels.Add(-1)
-	s.carry(p, ws)
+	s.carry(p, ws, proxySourceOf(r))
+}
+
+// admitSource judges a sandbox tunnel's source and answers 403 with no body when it is refused
+func (s *Server) admitSource(
+	w http.ResponseWriter, r *http.Request, p *placement, peer netip.Addr,
+) bool {
+	from := proxySourceOf(r)
+	if s.judgeSource(r.Context(), p, from) != Refused {
+		return true
+	}
+	if from.IsValid() {
+		peer = from
+	}
+	s.guard.Failed(peer)
+	s.m.tunnelRefused.Inc(strconv.Itoa(http.StatusForbidden))
+	w.WriteHeader(http.StatusForbidden)
+	return false
 }
 
 // takeTunnel counts one more tunnel of p, false at the limit
@@ -179,6 +209,9 @@ func (s *Server) authenticate(r *http.Request, src netip.Addr) (*placement, deni
 	}
 	req := &routerv1.ResolveTunnelRequest{
 		Caller: &routerv1.ResolveTunnelRequest_TokenSha256{TokenSha256: sum[:]}}
+	if from := proxySourceOf(r); from.IsValid() {
+		req.SourceIp = from.String()
+	}
 	return s.resolved(r.Context(), req, src, sum, true)
 }
 
@@ -241,9 +274,12 @@ func (s *Server) unknown(src netip.Addr, sum [32]byte, remember bool) denial {
 }
 
 // carry runs the inner TLS over the WebSocket and gives it to the shared server until it ends
-func (s *Server) carry(p *placement, ws *websocket.Conn) {
+func (s *Server) carry(p *placement, ws *websocket.Conn, from netip.Addr) {
 	ctx, cancel := p.lease.Child("tunnel")
 	defer cancel()
+	if !p.fetch {
+		defer p.track(from, cancel)()
+	}
 	stop := context.AfterFunc(s.runCtx, cancel)
 	defer stop()
 	defer func() {
@@ -336,4 +372,98 @@ func (s *Server) kindOf(p *placement, host string) hostKind {
 
 func normalHost(name string) string {
 	return strings.TrimSuffix(strings.ToLower(name), ".")
+}
+
+// sourceCheckWait bounds a forced resolve of a tunnel's source
+const sourceCheckWait = 5 * time.Second
+
+// judgeSource judges src against the placement's check, resolving once more when it fails
+func (s *Server) judgeSource(ctx context.Context, p *placement, src netip.Addr) Verdict {
+	v := p.view().src.Judge(src)
+	if (v == Unmatched || v == Refused) && s.forceResolve(ctx, p, src) {
+		v = p.view().src.Judge(src)
+	}
+	s.m.sources.Inc(v.String())
+	switch v {
+	case Unmatched:
+		s.log.Warn("tunnel_source_unmatched", "placement", p.short, "source", src.String())
+	case Refused:
+		s.log.Warn("tunnel_source_refused", "placement", p.short, "source", src.String())
+	case Unchecked, Admitted:
+	}
+	return v
+}
+
+// forceResolve asks the router again with src, past the cache, at most once every source_recheck
+func (s *Server) forceResolve(ctx context.Context, p *placement, src netip.Addr) bool {
+	if !src.IsValid() {
+		return false
+	}
+	p.mu.Lock()
+	now := s.now()
+	if !p.forcedAt.IsZero() && now.Sub(p.forcedAt) < time.Duration(s.cfg.SourceRecheck) {
+		p.mu.Unlock()
+		return false
+	}
+	p.forcedAt = now
+	p.mu.Unlock()
+	req := proto.Clone(p.caller).(*routerv1.ResolveTunnelRequest)
+	req.SourceIp = src.String()
+	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), sourceCheckWait)
+	defer cancel()
+	res, err := s.router.ResolveTunnel(rctx, connect.NewRequest(req))
+	if err != nil || res.Msg.GetPlacementId() != p.id {
+		return false
+	}
+	s.install(p, res.Msg)
+	return true
+}
+
+// withoutSource is req with no source_ip, so a later refresh of the placement observes nothing
+func withoutSource(req *routerv1.ResolveTunnelRequest) *routerv1.ResolveTunnelRequest {
+	out := proto.Clone(req).(*routerv1.ResolveTunnelRequest)
+	out.SourceIp = ""
+	return out
+}
+
+// openTunnel is a tunnel a moved check may close
+type openTunnel struct {
+	src    netip.Addr
+	cancel context.CancelFunc
+}
+
+// track records an open tunnel from src and returns the call that forgets it. A tunnel the
+// current check already refuses is closed at once, in case the check moved after it was judged
+func (p *placement) track(src netip.Addr, cancel context.CancelFunc) func() {
+	t := &openTunnel{src: src, cancel: cancel}
+	p.mu.Lock()
+	if p.open == nil {
+		p.open = map[*openTunnel]struct{}{}
+	}
+	p.open[t] = struct{}{}
+	refused := p.cur.src.Mode == routerv1.SourceCheckMode_SOURCE_CHECK_MODE_ENFORCE &&
+		p.cur.src.Judge(src) == Refused
+	p.mu.Unlock()
+	if refused {
+		cancel()
+	}
+	return func() {
+		p.mu.Lock()
+		delete(p.open, t)
+		p.mu.Unlock()
+	}
+}
+
+// closeRefused closes the open tunnels whose source check now refuses, in enforce mode only
+func (p *placement) closeRefused(check SourceCheck) {
+	if check.Mode != routerv1.SourceCheckMode_SOURCE_CHECK_MODE_ENFORCE {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for t := range p.open {
+		if check.Judge(t.src) == Refused {
+			t.cancel()
+		}
+	}
 }
