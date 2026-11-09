@@ -533,7 +533,7 @@ func TestPreviewAndTransferGuardsAreSeparate(t *testing.T) {
 	if code := preview("192.0.2.8"); code != http.StatusUnauthorized {
 		t.Fatalf("the preview route answered %d for an address only transfers marked", code)
 	}
-	if d.Landing == nil || d.Hooks != nil {
-		t.Fatal("the edge serves the landing page and, until hooks land, no hooks route")
+	if d.Landing == nil || d.Hooks == nil {
+		t.Fatal("the edge serves the landing page and the hooks route")
 	}
 }
