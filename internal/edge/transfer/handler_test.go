@@ -803,9 +803,18 @@ func (h *harness) waitStalled(t *testing.T) {
 	})
 }
 
+// unstall widens the stalled client's read buffer so what queued behind the stall drains fast
+func unstall(c net.Conn) {
+	// Linux loopback segments are 64 KiB, so a 16 KiB buffer would drain at a few hundred KB/s
+	if tc, ok := c.(*net.TCPConn); ok {
+		_ = tc.SetReadBuffer(4 << 20)
+	}
+}
+
 // cutShort reads what reached the client and fails unless its connection ended short of size
 func cutShort(t *testing.T, c net.Conn, size int) {
 	t.Helper()
+	unstall(c)
 	_ = c.SetReadDeadline(time.Now().Add(shortWait))
 	n, err := io.Copy(io.Discard, c)
 	var ne net.Error
@@ -924,6 +933,7 @@ func TestAnExtensionMovesTheHardStopOfRunningTransfers(t *testing.T) {
 	eq(t, used, true)
 	eq(t, string(written), "1234567890")
 
+	unstall(c)
 	_ = c.SetReadDeadline(time.Now().Add(shortWait))
 	res, err := http.ReadResponse(bufio.NewReader(c), &http.Request{Method: "GET"})
 	if err != nil {
