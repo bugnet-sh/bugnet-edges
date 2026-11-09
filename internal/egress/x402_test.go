@@ -186,6 +186,12 @@ func TestX402SelfPaid402PassesUnchanged(t *testing.T) {
 	eq(t, resp.Header.Get("Payment-Required"), "seller-own")
 	eq(t, resp.Header.Get(x402.HeaderError), "")
 	eq(t, body(t, resp), "seller body")
+	// The request queues its event as it ends, after the client read the answer
+	within(t, "the self-paid event", func() bool {
+		x.h.router.mu.Lock()
+		defer x.h.router.mu.Unlock()
+		return len(x.h.router.x402Events) >= 1
+	})
 	x.stopEv()
 	eq(t, x.h.router.x402Events[0].Status, x402.EventSelfPaid)
 }

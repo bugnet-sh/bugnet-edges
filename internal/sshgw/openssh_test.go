@@ -70,7 +70,7 @@ UsePAM no
 StrictModes no
 PasswordAuthentication no
 KbdInteractiveAuthentication no
-Subsystem sftp /usr/libexec/sftp-server
+Subsystem sftp internal-sftp
 AllowTcpForwarding yes
 PermitUserEnvironment no
 `, sshdPort, filepath.Join(dir, "hk"), authorized, filepath.Join(dir, "sshd.pid"))
