@@ -102,6 +102,16 @@ jobs:
           version: v2.14.0
           working-directory: bugnet-edges
 
+      # Temporary: repeats the tests this branch changed
+      - name: Repeat the changed tests
+        run: |
+          set -euo pipefail
+          {
+            go test -count=20 -run '^TestX402SelfPaid402PassesUnchanged$' ./internal/egress/
+            go test -count=3 -run '^(TestLeaseEndCutsADownloadWhoseClientStoppedReading|TestHardStopCutsRunningTransfers|TestAnExtensionMovesTheHardStopOfRunningTransfers)$' ./internal/edge/transfer/
+            go test -count=3 -run '^TestOpenSSHClientMatrix$' ./internal/sshgw/
+          } 2>&1 | tee "$RUNNER_TEMP/go-test.log"
+
       - name: go test
         run: |
           set -euo pipefail
