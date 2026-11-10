@@ -252,11 +252,17 @@ func (h *handler) download(ctx context.Context, q *request, m *routerv1.OpenTran
 		h.letGo(m)
 		return
 	}
-	req := &routerv1.ReadTransferRequest{TransferId: m.GetTransferId(), Lease: m.GetLease()}
+	req := &routerv1.ReadTransferRequest{
+		TransferId: m.GetTransferId(), Lease: m.GetLease(), HoldEnd: true,
+	}
 	if s.status == http.StatusPartialContent {
 		req.Offset, req.Length = s.offset, s.n
 	}
-	stream, err := h.newCall().ReadTransfer(ctx, connect.NewRequest(req))
+	// The client's hang-up cuts the router's stream until every byte is flushed, not after
+	sctx, scancel := context.WithCancel(context.WithoutCancel(ctx))
+	defer scancel()
+	unlink := context.AfterFunc(ctx, scancel)
+	stream, err := h.newCall().ReadTransfer(sctx, connect.NewRequest(req))
 	if err != nil {
 		answer(q, h.refusal(ctx, q, err))
 		return
@@ -296,7 +302,7 @@ func (h *handler) download(ctx context.Context, q *request, m *routerv1.OpenTran
 		msg := stream.Msg()
 		if holding {
 			if write(held) != nil {
-				abort(q)
+				h.undelivered(q, m, stream)
 			}
 		}
 		held, holding, verified = msg.GetData(), true, msg.GetVerified()
@@ -306,10 +312,40 @@ func (h *handler) download(ctx context.Context, q *request, m *routerv1.OpenTran
 			answer(q, h.refusal(ctx, q, cmpErr(stream.Err(), errCut)))
 			return
 		}
-		abort(q)
+		h.undelivered(q, m, stream)
 	}
-	if write(held) != nil || sent != s.n {
-		abort(q)
+	if write(held) != nil || sent != s.n || q.rc.Flush() != nil {
+		h.undelivered(q, m, stream)
+	}
+	// The router records its hold after its last send, so its stream ends before the confirm
+	unlink()
+	stop := time.AfterFunc(letGoTimeout, scancel)
+	for stream.Receive() {
+	}
+	stop.Stop()
+	h.end(q, m, true)
+}
+
+// undelivered hands the claim back as issued and cuts the client's connection
+func (h *handler) undelivered(
+	q *request, m *routerv1.OpenTransferResponse,
+	stream *connect.ServerStreamForClient[routerv1.ReadTransferResponse],
+) {
+	_ = stream.Close()
+	h.end(q, m, false)
+	abort(q)
+}
+
+// end tells the router whether the download reached the client, on a context of its own
+func (h *handler) end(q *request, m *routerv1.OpenTransferResponse, delivered bool) {
+	ctx, cancel := context.WithTimeout(context.Background(), letGoTimeout)
+	defer cancel()
+	_, err := h.newCall().EndTransfer(ctx, connect.NewRequest(&routerv1.EndTransferRequest{
+		TransferId: m.GetTransferId(), Lease: m.GetLease(), Delivered: delivered,
+	}))
+	if err != nil {
+		h.d.Log.Warn("transfer: end a download", "transfer", q.short, "delivered", delivered,
+			"err", err)
 	}
 }
 

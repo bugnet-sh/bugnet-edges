@@ -483,6 +483,23 @@ func TestARefusedRangeLetsTheClaimGo(t *testing.T) {
 	})
 }
 
+func TestACleanDownloadHoldsTheEndAndConfirmsIt(t *testing.T) {
+	h := newHarness(t)
+	r := h.get(t, h.downTok([]byte("0123456789")))
+	eq(t, string(r.body), "0123456789")
+	waitFor(t, "the confirm", func() bool {
+		h.router.mu.Lock()
+		defer h.router.mu.Unlock()
+		return len(h.router.ends) == 1
+	})
+	h.router.mu.Lock()
+	defer h.router.mu.Unlock()
+	eq(t, h.router.reads[0].GetHoldEnd(), true)
+	eq(t, h.router.ends[0].req.GetDelivered(), true)
+	eq(t, h.router.ends[0].req.GetTransferId(), h.router.reads[0].GetTransferId())
+	eq(t, h.router.ends[0].readsDone, 1)
+}
+
 func TestDownloadHeaders(t *testing.T) {
 	h := newHarness(t)
 	sum := sha256.Sum256([]byte("abc"))
@@ -845,6 +862,11 @@ func TestLeaseEndCutsADownloadWhoseClientStoppedReading(t *testing.T) {
 	waitFor(t, "the router's stream cut", func() bool {
 		_, cut := h.router.reading()
 		return cut == 1
+	})
+	waitFor(t, "the undelivered end", func() bool {
+		h.router.mu.Lock()
+		defer h.router.mu.Unlock()
+		return len(h.router.ends) == 1 && !h.router.ends[0].req.GetDelivered()
 	})
 	cutShort(t, c, size)
 }

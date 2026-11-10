@@ -160,7 +160,9 @@ Before the router is asked:
   (20) the address is marked for 10 minutes, and its unknown tokens get 429 with
   `Retry-After: 600`. A token that resolves always works.
 - `OpenTransfer` runs on the shared router connection. Each `ReadTransfer` and `WriteTransfer`
-  gets its own HTTP/1.1 connection, so a stalled transfer stalls no other.
+  gets its own HTTP/1.1 connection, so a stalled transfer stalls no other. A download sets
+  `hold_end` and calls `EndTransfer` once its last byte is flushed, with `delivered` false when
+  it aborts.
 - Every answer carries `Connection: close`, so each connection holds one request, and the
   requests an address has in flight are its open connections.
 - The placement's lease holds each transfer. The lease's end, a spent budget or `max_duration`
