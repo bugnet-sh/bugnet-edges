@@ -60,6 +60,12 @@ type file struct {
 	writes    int // upload streams that named this file and ended
 }
 
+// endCall is one EndTransfer the fake got, with the finished reads at that time
+type endCall struct {
+	req       *routerv1.EndTransferRequest
+	readsDone int
+}
+
 // fakeRouter is an EdgeService that serves transfers from memory and records every call
 type fakeRouter struct {
 	routerv1connect.UnimplementedEdgeServiceHandler
@@ -72,6 +78,8 @@ type fakeRouter struct {
 	aborted  int   // WriteTransfer streams that ended without a clean close
 	readSent int64 // bytes ReadTransfer sent
 	readsCut int   // ReadTransfer streams the edge ended before their last message
+	readsEnd int   // ReadTransfer handlers that returned
+	ends     []endCall
 	usage    map[string][2]uint64
 	// openErr, when set, answers every OpenTransfer
 	openErr error
@@ -196,6 +204,11 @@ func (f *fakeRouter) ReadTransfer(
 	f.reads = append(f.reads, req.Msg)
 	x := f.byID(req.Msg.GetTransferId())
 	f.mu.Unlock()
+	defer func() {
+		f.mu.Lock()
+		f.readsEnd++
+		f.mu.Unlock()
+	}()
 	if x == nil {
 		return refusal(connect.CodeNotFound, "TOKEN_UNKNOWN")
 	}
@@ -246,6 +259,15 @@ func (f *fakeRouter) ReadTransfer(
 		f.mu.Unlock()
 	}
 	return nil
+}
+
+func (f *fakeRouter) EndTransfer(
+	_ context.Context, req *connect.Request[routerv1.EndTransferRequest],
+) (*connect.Response[routerv1.EndTransferResponse], error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.ends = append(f.ends, endCall{req: req.Msg, readsDone: f.readsEnd})
+	return connect.NewResponse(&routerv1.EndTransferResponse{}), nil
 }
 
 func (f *fakeRouter) WriteTransfer(
