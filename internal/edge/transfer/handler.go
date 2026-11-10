@@ -258,7 +258,11 @@ func (h *handler) download(ctx context.Context, q *request, m *routerv1.OpenTran
 	if s.status == http.StatusPartialContent {
 		req.Offset, req.Length = s.offset, s.n
 	}
-	stream, err := h.newCall().ReadTransfer(ctx, connect.NewRequest(req))
+	// The client's hang-up cuts the router's stream until every byte is flushed, not after
+	sctx, scancel := context.WithCancel(context.WithoutCancel(ctx))
+	defer scancel()
+	unlink := context.AfterFunc(ctx, scancel)
+	stream, err := h.newCall().ReadTransfer(sctx, connect.NewRequest(req))
 	if err != nil {
 		answer(q, h.refusal(ctx, q, err))
 		return
@@ -306,7 +310,6 @@ func (h *handler) download(ctx context.Context, q *request, m *routerv1.OpenTran
 	if !verified {
 		if !started {
 			answer(q, h.refusal(ctx, q, cmpErr(stream.Err(), errCut)))
-			h.end(q, m, false)
 			return
 		}
 		h.undelivered(q, m, stream)
@@ -314,12 +317,12 @@ func (h *handler) download(ctx context.Context, q *request, m *routerv1.OpenTran
 	if write(held) != nil || sent != s.n || q.rc.Flush() != nil {
 		h.undelivered(q, m, stream)
 	}
-	// The router records its hold after its last send, so its stream must end before the confirm
+	// The router records its hold after its last send, so its stream ends before the confirm
+	unlink()
+	stop := time.AfterFunc(letGoTimeout, scancel)
 	for stream.Receive() {
 	}
-	if stream.Err() != nil {
-		h.undelivered(q, m, stream)
-	}
+	stop.Stop()
 	h.end(q, m, true)
 }
 
