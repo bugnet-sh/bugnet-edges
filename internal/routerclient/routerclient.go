@@ -8,6 +8,10 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"connectrpc.com/connect"
+
+	"github.com/bugnet-sh/bugnet-edges/internal/telemetry"
 )
 
 var (
@@ -22,6 +26,15 @@ const (
 	pingAfter   = 30 * time.Second
 	pingTimeout = 15 * time.Second
 )
+
+// Options are the Connect client options every router client takes, the trace interceptor while
+// traces are on and none otherwise
+func Options(tel *telemetry.Telemetry) []connect.ClientOption {
+	if !tel.Enabled() {
+		return nil
+	}
+	return []connect.ClientOption{connect.WithInterceptors(tel.ClientInterceptor())}
+}
 
 // New is the shared client, h2c to an http router so calls share one connection, TLS otherwise
 func New(baseURL, token string) *http.Client {

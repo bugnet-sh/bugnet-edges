@@ -74,6 +74,11 @@ func (c Code) RetryAfter(d time.Duration) Code {
 	return c
 }
 
+// Name is the error's code word, such as too_long
+func (c Code) Name() string {
+	return c.code
+}
+
 // Status is the error's HTTP status
 func (c Code) Status() int {
 	return c.status

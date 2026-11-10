@@ -30,6 +30,7 @@ a test seller for local and mainnet test runs, never deployed with them.
 | `internal/tlsconf` | One TLS config that picks the certificate and ALPN list by SNI |
 | `internal/settings` | Strict TOML settings files, byte sizes and durations |
 | `internal/routerclient` | Bearer-token HTTP clients for router-api's Connect services |
+| `internal/telemetry` | Trace export, the span allowlist, the client interceptor and `Session` |
 | `internal/metrics` | Counters and gauges in the Prometheus text format, with no client library |
 | `internal/strangers` | Limits on clients without a valid token, per client address |
 | `internal/pace` | Per-placement pace each way, under one total cap per process |
@@ -671,6 +672,46 @@ send the caller's token only to the router URL and never follow a redirect.
 | --- | --- | --- |
 | `New` | h2c to an `http://` router, else h2 or HTTP/1.1 over TLS | Every call but transfers |
 | `PerCall` | HTTP/1.1, one connection per call | Transfers, so one stalled stalls no other |
+
+Each Connect client takes `routerclient.Options(tel)`, which adds the trace interceptor while
+traces are on. A call made under a span sends its `traceparent` and records a client span. A call
+made under no span sends nothing, and the eleven procedures that run every few seconds or for
+hours are never traced.
+
+## Traces
+
+With `telemetry.traces = true` the edge, secrets, SSH and egress binaries export spans over
+OTLP/HTTP into the order's trace (DP 20.5). The router names each session's parent in
+`order_traceparent`, the answer of `ResolvePreview`, `OpenTransfer`, `AuthorizeSshKey` and
+`ResolveTunnel`. An empty value, which the router answers while its own traces are off, makes no
+session span. A request that resolves to no live placement makes no span, so strangers cannot fill
+the backend.
+
+| Span | Parent | Lives |
+| --- | --- | --- |
+| `edge.preview.route` | `ResolvePreview` | While the route is cached, with its request, status, WebSocket and byte counts |
+| `edge.preview.repair` | `edge.preview.route` | The `RepairPreview` call, with `repaired` |
+| `edge.transfer` | `OpenTransfer` | The request's arrival to its last byte, with `transfer_hash` and `direction` |
+| `ssh.connection` | `AuthorizeSshKey` | After `acquire` succeeds, backdated to the TCP accept |
+| `ssh.upstream` | `ssh.connection` | `OpenSshUpstream` to the end of the upstream handshake |
+| `egress.tunnel` | `ResolveTunnel` | Accept to close, with a preset host's name or `custom` |
+
+`bugnet-secrets` and `bugnet-certs` make no spans, and the hooks route makes none. A visitor's own
+`traceparent` reaches the app unchanged, and the edge adds no trace header to any gate request.
+Every attribute passes the router's allowlist before it leaves the process, and a test in each
+repository pins the list, the never-traced procedures and the derivation label.
+
+| Setting | Meaning |
+| --- | --- |
+| `traces` | `false` builds no span, sends no header and connects nowhere |
+| `otlp_endpoint` | The full traces URL, `https`, or `http` to a loopback host only |
+| `sample_ratio` | 0 to 1, the same value as the router's and the gateway's |
+| `environment` | `deployment.environment.name` on every span |
+| `export_timeout`, `batch_timeout`, `batch_size`, `queue_size` | The exporter's bounds |
+
+`BUGNET_OTLP_AUTHORIZATION` holds the whole `Authorization` header value, empty for a local
+collector. `OTEL_` variables are ignored. Each binary flushes its queue for 5 s after its other
+shutdown steps.
 
 ## Calling Payments
 

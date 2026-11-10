@@ -41,6 +41,25 @@ type fakeRouter struct {
 
 	authorizes, acquires, renews, releases, checks, upstreams int
 	released                                                  []string
+	// orderTP is the order_traceparent every AuthorizeSshKey answers
+	orderTP string
+	// traceparents holds the traceparent header of each call, by method name
+	traceparents map[string][]string
+}
+
+// noteTrace records the traceparent a call carried, empty when it carried none
+func (f *fakeRouter) noteTrace(method string, h http.Header) {
+	if f.traceparents == nil {
+		f.traceparents = map[string][]string{}
+	}
+	f.traceparents[method] = append(f.traceparents[method], h.Get("Traceparent"))
+}
+
+// carried is the traceparent headers the calls of method carried
+func (f *fakeRouter) carried(method string) []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.traceparents[method]...)
 }
 
 func newFakeRouter() *fakeRouter {
@@ -102,6 +121,7 @@ func (f *fakeRouter) AuthorizeSshKey(
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.authorizes++
+	f.noteTrace("AuthorizeSshKey", req.Header())
 	fp, err := fingerprintOf(req.Msg.GetPublicKey())
 	if err != nil {
 		return nil, errInfo(connect.CodeNotFound, "GRANT_UNKNOWN")
@@ -116,7 +136,7 @@ func (f *fakeRouter) AuthorizeSshKey(
 	}
 	return connect.NewResponse(&routerv1.AuthorizeSshKeyResponse{
 		GrantId: grantID(placement, fp), PlacementId: placement, Deadline: timestamppb.New(d),
-		MaxSessions: f.maxSess, MaxForwards: f.maxFwd,
+		MaxSessions: f.maxSess, MaxForwards: f.maxFwd, OrderTraceparent: f.orderTP,
 	}), nil
 }
 
@@ -126,6 +146,7 @@ func (f *fakeRouter) AcquireSshConnection(
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.acquires++
+	f.noteTrace("AcquireSshConnection", req.Header())
 	if f.acquireErr != nil {
 		return nil, f.acquireErr
 	}
@@ -154,6 +175,7 @@ func (f *fakeRouter) ReleaseSshConnection(
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.releases++
+	f.noteTrace("ReleaseSshConnection", req.Header())
 	f.released = append(f.released, req.Msg.GetLeaseId())
 	delete(f.leases, req.Msg.GetLeaseId())
 	return connect.NewResponse(&routerv1.ReleaseSshConnectionResponse{}), nil
@@ -173,6 +195,7 @@ func (f *fakeRouter) OpenSshUpstream(
 ) (*connect.Response[routerv1.OpenSshUpstreamResponse], error) {
 	f.mu.Lock()
 	f.upstreams++
+	f.noteTrace("OpenSshUpstream", req.Header())
 	fn := f.upstream
 	f.mu.Unlock()
 	if fn == nil {
@@ -237,9 +260,17 @@ func (f *fakeRouter) push(ev *routerv1.EdgeEvent) {
 // serveRouter runs f behind an httptest server and answers a client of it
 func serveRouter(t *testing.T, f *fakeRouter) routerv1connect.SshGatewayServiceClient {
 	t.Helper()
+	return serveRouterWith(t, f)
+}
+
+// serveRouterWith is serveRouter with Connect client options, such as the trace interceptor
+func serveRouterWith(
+	t *testing.T, f *fakeRouter, opts ...connect.ClientOption,
+) routerv1connect.SshGatewayServiceClient {
+	t.Helper()
 	mux := http.NewServeMux()
 	mux.Handle(routerv1connect.NewSshGatewayServiceHandler(f))
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
-	return routerv1connect.NewSshGatewayServiceClient(srv.Client(), srv.URL)
+	return routerv1connect.NewSshGatewayServiceClient(srv.Client(), srv.URL, opts...)
 }

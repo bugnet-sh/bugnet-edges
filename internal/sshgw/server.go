@@ -16,6 +16,7 @@ import (
 
 	routerv1 "github.com/bugnet-sh/bugnet-proto/gen/go/bugnet/router/v1"
 	"github.com/bugnet-sh/bugnet-proto/gen/go/bugnet/router/v1/routerv1connect"
+	"go.opentelemetry.io/otel/trace"
 	"golang.org/x/crypto/ssh"
 
 	"github.com/bugnet-sh/bugnet-edges/internal/events"
@@ -38,6 +39,7 @@ type Gateway struct {
 	router routerv1connect.SshGatewayServiceClient
 	log    *slog.Logger
 	seed   [32]byte
+	tracer trace.Tracer
 
 	accepts *strangers.PerIP
 	guard   *strangers.Guard
@@ -82,6 +84,7 @@ func New(cfg Config, router routerv1connect.SshGatewayServiceClient) *Gateway {
 	}
 	g := &Gateway{
 		cfg: cfg, router: router, log: cfg.Log.With("role", "ssh"),
+		tracer:  cfg.Tracing.Tracer(tracerScope),
 		accepts: strangers.NewPerIP(cfg.AcceptsPerMinutePerIP),
 		guard: strangers.NewGuard(cfg.AuthFailuresPerMinutePerIP, strangers.Mark,
 			strangers.Unknown),

@@ -34,7 +34,7 @@ type session struct {
 // serve dials the upstream and relays channels until the connection ends (DP 9.4 and 9.5)
 func (c *conn) serve(chans <-chan ssh.NewChannel, reqs <-chan *ssh.Request) {
 	go c.globalRequests(reqs)
-	up, err := c.g.dialUpstream(c.ctx, c.grantID, c.placement)
+	up, err := c.g.dialUpstream(c.traced(), c.grantID, c.placement)
 	if err != nil {
 		if c.ctx.Err() == nil {
 			c.g.log.Warn("ssh: the upstream did not open", "placement", c.placement,
@@ -85,6 +85,7 @@ func (c *conn) channel(nc ssh.NewChannel, up ssh.Conn) {
 			_ = nc.Reject(ssh.ResourceShortage, "")
 			return
 		}
+		c.trace.sessions.Add(1)
 		c.relays.Go(func() {
 			defer c.sessionCount.Add(-1)
 			c.session(nc, up)
@@ -95,6 +96,7 @@ func (c *conn) channel(nc ssh.NewChannel, up ssh.Conn) {
 			_ = nc.Reject(ssh.ResourceShortage, "")
 			return
 		}
+		c.trace.forwards.Add(1)
 		c.relays.Go(func() {
 			defer c.forwardCount.Add(-1)
 			c.forward(nc, up)

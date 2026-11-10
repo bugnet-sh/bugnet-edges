@@ -23,6 +23,7 @@ import (
 	"github.com/bugnet-sh/bugnet-edges/internal/proxyproto"
 	"github.com/bugnet-sh/bugnet-edges/internal/reuseport"
 	"github.com/bugnet-sh/bugnet-edges/internal/strangers"
+	"github.com/bugnet-sh/bugnet-edges/internal/telemetry"
 	"github.com/bugnet-sh/bugnet-edges/internal/tlsconf"
 	"github.com/bugnet-sh/bugnet-edges/internal/traffic"
 	"github.com/bugnet-sh/bugnet-edges/internal/x402"
@@ -67,6 +68,8 @@ type Deps struct {
 	HostRate *x402.HostRate
 	// Signer asks Payments to sign, a payable 402 is refused as payments_unavailable when nil
 	Signer *x402.Signer
+	// Telemetry makes the egress.tunnel spans, nil or off makes none
+	Telemetry *telemetry.Telemetry
 }
 
 // Server is the egress proxy, the outer listener and the tunnels it carries
@@ -95,6 +98,7 @@ type Server struct {
 	open         *openCount
 	cache        *x402.Cache
 	netRefused   *metrics.Counter
+	tel          *telemetry.Telemetry
 
 	group   singleflight.Group
 	cacheMu sync.Mutex
@@ -144,7 +148,7 @@ func New(cfg Config, d Deps) *Server {
 			strangers.Unknown),
 		callers: map[string]cached{}, places: map[string]*placement{},
 		refusedSNI: d.RefusedSNI, started: make(chan struct{}), bound: map[string]string{},
-		innerLn: newConnQueue(),
+		innerLn: newConnQueue(), tel: d.Telemetry,
 	}
 	s.refreshEvery = cmp.Or(d.RefreshEvery, defaultRefreshEvery)
 	s.m = newProxyMetrics(d.Metrics)

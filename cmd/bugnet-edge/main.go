@@ -24,11 +24,12 @@ import (
 	"github.com/bugnet-sh/bugnet-edges/internal/secretsroute"
 	"github.com/bugnet-sh/bugnet-edges/internal/sessionsroute"
 	"github.com/bugnet-sh/bugnet-edges/internal/strangers"
+	"github.com/bugnet-sh/bugnet-edges/internal/telemetry"
 	"github.com/bugnet-sh/bugnet-edges/internal/traffic"
 )
 
 func main() {
-	log := slog.New(slog.NewJSONHandler(os.Stderr, nil))
+	log := slog.New(telemetry.LogHandler(slog.NewJSONHandler(os.Stderr, nil)))
 	slog.SetDefault(log)
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, os.Interrupt)
 	defer stop()
@@ -58,13 +59,13 @@ func run(
 		if err != nil {
 			return err
 		}
-		return runEdge(ctx, cfg, log.With("edge_id", cfg.EdgeID))
+		return runEdge(ctx, cfg, getenv, log.With("edge_id", cfg.EdgeID))
 	case "secrets":
 		cfg, err := edge.LoadSecrets(*path, getenv)
 		if err != nil {
 			return err
 		}
-		return runSecrets(ctx, cfg, log)
+		return runSecrets(ctx, cfg, getenv, log)
 	case "sessions":
 		cfg, err := edge.LoadSessions(*path, getenv)
 		if err != nil {
@@ -76,9 +77,19 @@ func run(
 }
 
 // runSecrets serves the entry page and the sealed PUTs from its own settings and token
-func runSecrets(ctx context.Context, cfg edge.SecretsConfig, log *slog.Logger) error {
+func runSecrets(
+	ctx context.Context, cfg edge.SecretsConfig, getenv func(string) (string, bool),
+	log *slog.Logger,
+) error {
+	// The role makes no spans, its calls send no trace context
+	tel, err := telemetry.FromTable(cfg.Telemetry,
+		telemetry.Process{Service: "bugnet-secrets", InstanceID: "secrets"}, getenv, log)
+	if err != nil {
+		return err
+	}
+	defer tel.Close()
 	router := routerv1connect.NewSecretsRouteServiceClient(
-		routerclient.New(cfg.RouterURL, cfg.Token), cfg.RouterURL)
+		routerclient.New(cfg.RouterURL, cfg.Token), cfg.RouterURL, routerclient.Options(tel)...)
 	route, err := secretsroute.New(router, secretsroute.Options{
 		Host:              cfg.Host,
 		PageDir:           cfg.PageDir,
@@ -127,7 +138,8 @@ func runSessions(ctx context.Context, cfg edge.SessionsConfig, log *slog.Logger)
 // edgeRoutes builds the edge's handlers, each route with its own rule for failed tokens
 func edgeRoutes(
 	cfg edge.Config, router routerv1connect.EdgeServiceClient,
-	newCall func() routerv1connect.EdgeServiceClient, tr *traffic.Traffic, log *slog.Logger,
+	newCall func() routerv1connect.EdgeServiceClient, tr *traffic.Traffic,
+	tel *telemetry.Telemetry, log *slog.Logger,
 ) edge.Deps {
 	p, t := cfg.Previews, cfg.Transfers
 	guard := func(perMinute int) *strangers.Guard {
@@ -144,6 +156,7 @@ func edgeRoutes(
 			AbuseContact:  p.AbuseContact,
 			BoatPerMinute: p.BoatRequestsPerMinute,
 			BoatSuffix:    p.BoatHostSuffix,
+			Telemetry:     tel,
 			Log:           log,
 		}),
 		Transfer: transfer.New(router, newCall, transfer.Deps{
@@ -153,6 +166,7 @@ func edgeRoutes(
 			Conns:       strangers.NewConns(t.MaxConnectionsPerIP),
 			Chunk:       int(t.Chunk),
 			IdleTimeout: time.Duration(t.IdleTimeout),
+			Telemetry:   tel,
 			Log:         log,
 		}),
 		Hooks: hooks.New(router, hooks.Options{
@@ -168,13 +182,23 @@ func edgeRoutes(
 }
 
 // runEdge serves the edge role with one set of traffic pieces, kept running through the drain
-func runEdge(ctx context.Context, cfg edge.Config, log *slog.Logger) error {
+func runEdge(
+	ctx context.Context, cfg edge.Config, getenv func(string) (string, bool), log *slog.Logger,
+) error {
+	tel, err := telemetry.FromTable(cfg.Telemetry,
+		telemetry.Process{Service: "bugnet-edge", InstanceID: cfg.EdgeID}, getenv, log)
+	if err != nil {
+		return err
+	}
+	// The flush runs after every other shutdown step
+	defer tel.Close()
+	opts := routerclient.Options(tel)
 	router := routerv1connect.NewEdgeServiceClient(
-		routerclient.New(cfg.RouterURL, cfg.Token), cfg.RouterURL)
+		routerclient.New(cfg.RouterURL, cfg.Token), cfg.RouterURL, opts...)
 	// Each transfer stream gets its own HTTP/1.1 connection, so one stalled stalls no other
 	newCall := func() routerv1connect.EdgeServiceClient {
 		return routerv1connect.NewEdgeServiceClient(
-			routerclient.PerCall(cfg.RouterURL, cfg.Token), cfg.RouterURL)
+			routerclient.PerCall(cfg.RouterURL, cfg.Token), cfg.RouterURL, opts...)
 	}
 	tr := traffic.Edge(router, traffic.Settings{
 		ReporterID:          cfg.EdgeID,
@@ -182,7 +206,7 @@ func runEdge(ctx context.Context, cfg edge.Config, log *slog.Logger) error {
 		ReportBytes:         int64(cfg.Usage.ReportBytes),
 		TotalBytesPerSecond: int64(cfg.TotalBytesPerSecond),
 	}, log)
-	routes := edgeRoutes(cfg, router, newCall, tr, log)
+	routes := edgeRoutes(cfg, router, newCall, tr, tel, log)
 
 	// Requests still draining keep counting, so the traffic pieces stop only after the server
 	tctx, stopTraffic := context.WithCancel(context.WithoutCancel(ctx))
@@ -191,7 +215,7 @@ func runEdge(ctx context.Context, cfg edge.Config, log *slog.Logger) error {
 		defer close(done)
 		tr.Run(tctx)
 	}()
-	err := edge.New(cfg, routes).Run(ctx)
+	err = edge.New(cfg, routes).Run(ctx)
 	stopTraffic()
 	<-done
 	return err

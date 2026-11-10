@@ -18,6 +18,8 @@ type reqState struct {
 	status  int
 	bytes   int64
 	counted bool
+	// refused says the proxy answered the request itself and never forwarded it
+	refused bool
 }
 
 func stateOf(ctx context.Context) *reqState {

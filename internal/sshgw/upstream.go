@@ -14,6 +14,9 @@ import (
 	routerv1 "github.com/bugnet-sh/bugnet-proto/gen/go/bugnet/router/v1"
 	"github.com/coder/websocket"
 	"golang.org/x/crypto/ssh"
+
+	"github.com/bugnet-sh/bugnet-edges/internal/telemetry"
+	"github.com/bugnet-sh/bugnet-edges/internal/telemetry/attr"
 )
 
 const (
@@ -31,7 +34,11 @@ var (
 )
 
 // dialUpstream opens the SSH connection to placement's sshd as DP 9.4 describes
-func (g *Gateway) dialUpstream(ctx context.Context, grant, placement string) (ssh.Conn, error) {
+func (g *Gateway) dialUpstream(
+	ctx context.Context, grant, placement string,
+) (conn ssh.Conn, err error) {
+	ctx, span := telemetry.Child(ctx, g.tracer, "ssh.upstream")
+	defer func() { endUpstream(span, err) }()
 	key := g.upstreamKey(placement)
 	signer, err := ssh.NewSignerFromKey(key)
 	if err != nil {
@@ -46,6 +53,7 @@ func (g *Gateway) dialUpstream(ctx context.Context, grant, placement string) (ss
 		return nil, err
 	}
 	up := res.Msg
+	span.SetAttributes(attr.Transport(transportName(up)))
 	pinned, algos, err := parsePinned(up.GetHostKeys())
 	if err != nil {
 		return nil, err

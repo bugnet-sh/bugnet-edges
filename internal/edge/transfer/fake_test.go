@@ -85,6 +85,12 @@ type fakeRouter struct {
 	openErr error
 	// deadline is the placement's deadline, an hour from each call when zero
 	deadline time.Time
+	// placement is the placement every OpenTransfer names, p1 when empty
+	placement string
+	// orderTP is the order_traceparent every OpenTransfer answers
+	orderTP string
+	// readTP holds the traceparent header of each ReadTransfer
+	readTP []string
 }
 
 func newFakeRouter() *fakeRouter {
@@ -185,10 +191,11 @@ func (f *fakeRouter) OpenTransfer(
 	expires := f.deadlineLocked()
 	stop := now.Add(cmp.Or(x.hardStop, 30*time.Minute))
 	out := &routerv1.OpenTransferResponse{
-		TransferId: x.id, Lease: "lease-" + x.id[:4], PlacementId: "p1", FileName: x.name,
-		Size: x.size, Etag: x.etag, HardStop: timestamppb.New(minTime(expires, stop)),
+		TransferId: x.id, Lease: "lease-" + x.id[:4], PlacementId: cmp.Or(f.placement, "p1"),
+		FileName: x.name,
+		Size:     x.size, Etag: x.etag, HardStop: timestamppb.New(minTime(expires, stop)),
 		ExpiresAt: timestamppb.New(expires),
-		Budget:    &routerv1.EdgeBudget{BytesRemaining: gib},
+		Budget:    &routerv1.EdgeBudget{BytesRemaining: gib}, OrderTraceparent: f.orderTP,
 	}
 	if x.dir == download {
 		out.ModifiedAt, out.Sha256 = timestamppb.New(now.Add(-time.Hour)), x.sha
@@ -202,6 +209,7 @@ func (f *fakeRouter) ReadTransfer(
 ) error {
 	f.mu.Lock()
 	f.reads = append(f.reads, req.Msg)
+	f.readTP = append(f.readTP, req.Header().Get("Traceparent"))
 	x := f.byID(req.Msg.GetTransferId())
 	f.mu.Unlock()
 	defer func() {

@@ -17,3 +17,13 @@ auth_failures_per_minute_per_ip = 20  # then the address is refused for 10 minut
 usage_report_interval = "5s"
 total_bytes_per_second = "16MiB"      # every placement together, both ways, 0 is no cap
 banner_fallback = false               # true answers a refused lease in the first session instead
+
+[telemetry]
+traces = false              # export spans over OTLP, nothing is built or sent while false
+otlp_endpoint = ""          # the full traces URL, https, or http to a loopback host only
+sample_ratio = 1.0          # 0 to 1, share of new traces kept, the router and the gateway use the same
+environment = "main"        # deployment.environment.name on every span
+export_timeout = "10s"      # one export request
+batch_timeout = "5s"        # the longest a finished span waits before export
+batch_size = 512            # spans per export request, 1 to queue_size
+queue_size = 2048           # finished spans waiting for export, more are dropped
