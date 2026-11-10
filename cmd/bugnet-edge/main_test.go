@@ -35,6 +35,7 @@ import (
 	"google.golang.org/genproto/googleapis/rpc/errdetails"
 
 	"github.com/bugnet-sh/bugnet-edges/internal/edge"
+	"github.com/bugnet-sh/bugnet-edges/internal/telemetry"
 	"github.com/bugnet-sh/bugnet-edges/internal/traffic"
 )
 
@@ -495,7 +496,7 @@ func TestPreviewAndTransferGuardsAreSeparate(t *testing.T) {
 	newCall := func() routerv1connect.EdgeServiceClient { return router }
 	tr := traffic.Edge(router, traffic.Settings{ReporterID: "edge-test",
 		ReportInterval: time.Minute}, quiet())
-	d := edgeRoutes(cfg, router, newCall, tr, quiet())
+	d := edgeRoutes(cfg, router, newCall, tr, telemetry.Off(), quiet())
 	send := func(h http.Handler, from, url string, header ...string) int {
 		r := httptest.NewRequest(http.MethodGet, url, nil)
 		r.RemoteAddr = from + ":4000"

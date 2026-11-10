@@ -16,6 +16,10 @@ type meter struct {
 	lane *pace.Lane
 	in   func(int)
 	sent func(int)
+	// status is the first final status written, 0 before one
+	status int
+	// hijacked says a WebSocket took the connection
+	hijacked bool
 }
 
 func newMeter(w http.ResponseWriter, lane *pace.Lane, in, out func(int)) *meter {
@@ -23,7 +27,18 @@ func newMeter(w http.ResponseWriter, lane *pace.Lane, in, out func(int)) *meter 
 }
 
 func (m *meter) Write(b []byte) (int, error) {
+	if m.status == 0 {
+		m.status = http.StatusOK
+	}
 	return m.out.Write(b)
+}
+
+// WriteHeader records the final status, interim ones pass through
+func (m *meter) WriteHeader(code int) {
+	if code >= 200 && m.status == 0 {
+		m.status = code
+	}
+	m.ResponseWriter.WriteHeader(code)
 }
 
 // Flush lets ReverseProxy flush server-sent events after each write
@@ -42,6 +57,7 @@ func (m *meter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 	if err != nil {
 		return nil, nil, err
 	}
+	m.hijacked = true
 	// Bytes the server read ahead come first, and the 101 written through brw is not counted
 	mc := &meteredConn{
 		Conn: c, r: m.lane.Reader(brw.Reader, true, m.in), w: m.lane.Writer(c, false, m.sent),

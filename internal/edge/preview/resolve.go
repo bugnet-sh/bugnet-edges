@@ -15,6 +15,8 @@ import (
 	"golang.org/x/sync/singleflight"
 
 	"github.com/bugnet-sh/bugnet-edges/internal/lease"
+	"github.com/bugnet-sh/bugnet-edges/internal/telemetry"
+	"github.com/bugnet-sh/bugnet-edges/internal/telemetry/attr"
 	"github.com/bugnet-sh/bugnet-edges/internal/traffic"
 )
 
@@ -48,6 +50,7 @@ type route struct {
 	expires      time.Time
 	boat         bool
 
+	trace routeTrace
 	lease *lease.Lease
 	// alive is the route's own preview child, which a revocation or the lease's end cancels
 	alive context.Context
@@ -61,6 +64,7 @@ type cache struct {
 	max        int
 	ttl        time.Duration
 	boatSuffix string
+	tel        *telemetry.Telemetry
 	group      singleflight.Group
 
 	mu  sync.Mutex
@@ -77,11 +81,12 @@ type entry struct {
 
 func newCache(
 	router routerv1connect.EdgeServiceClient, tr *traffic.Traffic, limit int, ttl time.Duration,
-	boatSuffix string,
+	boatSuffix string, tel *telemetry.Telemetry,
 ) *cache {
 	return &cache{
 		router: router, tr: tr, max: limit, ttl: ttl, boatSuffix: strings.ToLower(boatSuffix),
-		m: map[[32]byte]*list.Element{}, lru: list.New(),
+		tel: tel,
+		m:   map[[32]byte]*list.Element{}, lru: list.New(),
 	}
 }
 
@@ -95,7 +100,7 @@ func (c *cache) fresh(key [32]byte) *route {
 	}
 	e := el.Value.(*entry)
 	if e.rt.alive.Err() != nil {
-		c.removeLocked(el)
+		c.removeLocked(el, "done")
 		return nil
 	}
 	if !time.Now().Before(e.until) {
@@ -111,6 +116,7 @@ func (c *cache) resolve(ctx context.Context, key [32]byte, id, tok string) (*rou
 		if rt := c.fresh(key); rt != nil {
 			return rt, nil
 		}
+		arrived := time.Now()
 		rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), resolveTimeout)
 		defer cancel()
 		res, err := c.router.ResolvePreview(rctx, connect.NewRequest(
@@ -124,7 +130,7 @@ func (c *cache) resolve(ctx context.Context, key [32]byte, id, tok string) (*rou
 			c.drop(key)
 			return nil, err
 		}
-		rt, err := c.build(id, res.Msg)
+		rt, err := c.build(id, res.Msg, arrived)
 		if err != nil {
 			c.drop(key)
 			return nil, err
@@ -161,7 +167,7 @@ func (c *cache) stale(key [32]byte) *route {
 	}
 	e := el.Value.(*entry)
 	if e.rt.alive.Err() != nil {
-		c.removeLocked(el)
+		c.removeLocked(el, "done")
 		return nil
 	}
 	e.until = time.Now().Add(staleRetry)
@@ -169,7 +175,9 @@ func (c *cache) stale(key [32]byte) *route {
 }
 
 // build holds the placement's lease at the answer's deadline and budget, and the route's child
-func (c *cache) build(id string, m *routerv1.ResolvePreviewResponse) (*route, error) {
+func (c *cache) build(
+	id string, m *routerv1.ResolvePreviewResponse, arrived time.Time,
+) (*route, error) {
 	up := m.GetUpstream()
 	base, err := url.Parse(up.GetBaseUrl())
 	if err != nil || base.Scheme != "https" || base.Host == "" || base.User != nil ||
@@ -205,6 +213,8 @@ func (c *cache) build(id string, m *routerv1.ResolvePreviewResponse) (*route, er
 		}
 		return nil, connect.NewError(connect.CodeUnavailable, errors.New("lease ended"))
 	}
+	rt.trace.begin(rt.alive, c.tel, m.GetOrderTraceparent(), arrived,
+		attr.PlacementID(rt.placement), attr.PreviewID(id), attr.Port(rt.port))
 	return rt, nil
 }
 
@@ -212,11 +222,11 @@ func (c *cache) put(key [32]byte, rt *route) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if el, ok := c.m[key]; ok {
-		c.removeLocked(el)
+		c.removeLocked(el, "deadline")
 	}
 	c.m[key] = c.lru.PushFront(&entry{key: key, rt: rt, until: time.Now().Add(c.ttl)})
 	for c.lru.Len() > c.max {
-		c.removeLocked(c.lru.Back())
+		c.removeLocked(c.lru.Back(), "done")
 	}
 }
 
@@ -224,7 +234,7 @@ func (c *cache) drop(key [32]byte) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if el, ok := c.m[key]; ok {
-		c.removeLocked(el)
+		c.removeLocked(el, "done")
 	}
 }
 
@@ -234,15 +244,16 @@ func (c *cache) dropPreview(id string) {
 	defer c.mu.Unlock()
 	for _, el := range c.m {
 		if el.Value.(*entry).rt.id == id {
-			c.removeLocked(el)
+			c.removeLocked(el, "done")
 		}
 	}
 }
 
-func (c *cache) removeLocked(el *list.Element) {
+func (c *cache) removeLocked(el *list.Element, cause string) {
 	e := el.Value.(*entry)
 	delete(c.m, e.key)
 	c.lru.Remove(el)
+	e.rt.trace.setCause(cause)
 	e.rt.stop()
 }
 

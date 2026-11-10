@@ -22,6 +22,7 @@ import (
 
 	"github.com/bugnet-sh/bugnet-edges/internal/routerclient"
 	"github.com/bugnet-sh/bugnet-edges/internal/strangers"
+	"github.com/bugnet-sh/bugnet-edges/internal/telemetry"
 	"github.com/bugnet-sh/bugnet-edges/internal/traffic"
 )
 
@@ -70,6 +71,12 @@ type harness struct {
 
 func newHarness(t *testing.T, change ...func(*Deps)) *harness {
 	t.Helper()
+	return newHarnessWith(t, telemetry.Off(), change...)
+}
+
+// newHarnessWith is newHarness with tel on the handler and the router client
+func newHarnessWith(t *testing.T, tel *telemetry.Telemetry, change ...func(*Deps)) *harness {
+	t.Helper()
 	f := newFakeRouter()
 	g := newFakeGate(t)
 	g.listen(5173)
@@ -83,7 +90,8 @@ func newHarness(t *testing.T, change ...func(*Deps)) *harness {
 		BlockedPathPrefixes: []string{"/koyeb-sandbox/"},
 	}
 	base := f.serve(t)
-	shared := routerv1connect.NewEdgeServiceClient(routerclient.New(base, edgeToken), base)
+	shared := routerv1connect.NewEdgeServiceClient(
+		routerclient.New(base, edgeToken), base, routerclient.Options(tel)...)
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	tr := traffic.Edge(shared, traffic.Settings{
 		ReporterID: "edge-test", ReportInterval: 50 * time.Millisecond, ReportBytes: 8 << 20,
@@ -113,6 +121,7 @@ func newHarness(t *testing.T, change ...func(*Deps)) *harness {
 		AbuseContact: "support@bugnet.org",
 		BoatSuffix:   "on.boat.dev",
 		Transport:    up,
+		Telemetry:    tel,
 		Log:          log,
 	}
 	for _, c := range change {

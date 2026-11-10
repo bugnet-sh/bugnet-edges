@@ -18,6 +18,7 @@ import (
 
 	"github.com/bugnet-sh/bugnet-edges/internal/hostname"
 	"github.com/bugnet-sh/bugnet-edges/internal/settings"
+	"github.com/bugnet-sh/bugnet-edges/internal/telemetry"
 )
 
 // Config is bugnet-edge's settings file (DP 8.8) with the ACME switch, and its two secrets
@@ -37,6 +38,7 @@ type Config struct {
 	Hooks                Hooks             `toml:"hooks"`
 	Usage                Usage             `toml:"usage"`
 	ACME                 ACME              `toml:"acme"`
+	Telemetry            telemetry.Table   `toml:"telemetry"`
 
 	Token          string `toml:"-"` // BUGNET_EDGE_TOKEN
 	HookPathSecret string `toml:"-"` // BUGNET_HOOK_PATH_SECRET
@@ -132,6 +134,7 @@ func Defaults() Config {
 			StateDir:    "/var/lib/bugnet-edge",
 			WildcardDir: "/var/lib/bugnet-certs/preview",
 		},
+		Telemetry: telemetry.DefaultTable(),
 	}
 }
 
@@ -219,6 +222,7 @@ func (c *Config) check() error {
 		c.Hooks.check,
 		func() error { return positive("usage.report_interval", c.Usage.ReportInterval) },
 		c.ACME.check,
+		c.Telemetry.Check,
 	}
 	for _, check := range checks {
 		if err := check(); err != nil {
@@ -408,19 +412,20 @@ func callerToken(getenv func(string) (string, bool), name string) (string, error
 
 // SecretsConfig is bugnet-edge --role secrets' settings file (DP 8.4) and its token
 type SecretsConfig struct {
-	RouterURL         string         `toml:"router_url"`
-	TLSListenAddr     string         `toml:"tls_listen_addr"`
-	MetricsListenAddr string         `toml:"metrics_listen_addr"`
-	ProxyProtocolFrom []netip.Prefix `toml:"proxy_protocol_from"`
-	Host              string         `toml:"host"`
-	PageDir           string         `toml:"page_dir"`
-	RequestsPerMinute int            `toml:"requests_per_minute"`
-	MaxHeaderBytes    settings.Bytes `toml:"max_header_bytes"`
-	ACMEEnabled       bool           `toml:"acme_enabled"`
-	ACMEDirectory     string         `toml:"acme_directory"`
-	ACMEDir           string         `toml:"acme_dir"`
-	ACMEEmail         string         `toml:"acme_email"`
-	StaticDir         string         `toml:"static_dir"`
+	RouterURL         string          `toml:"router_url"`
+	TLSListenAddr     string          `toml:"tls_listen_addr"`
+	MetricsListenAddr string          `toml:"metrics_listen_addr"`
+	ProxyProtocolFrom []netip.Prefix  `toml:"proxy_protocol_from"`
+	Host              string          `toml:"host"`
+	PageDir           string          `toml:"page_dir"`
+	RequestsPerMinute int             `toml:"requests_per_minute"`
+	MaxHeaderBytes    settings.Bytes  `toml:"max_header_bytes"`
+	ACMEEnabled       bool            `toml:"acme_enabled"`
+	ACMEDirectory     string          `toml:"acme_directory"`
+	ACMEDir           string          `toml:"acme_dir"`
+	ACMEEmail         string          `toml:"acme_email"`
+	StaticDir         string          `toml:"static_dir"`
+	Telemetry         telemetry.Table `toml:"telemetry"`
 
 	Token string `toml:"-"` // BUGNET_SECRETS_TOKEN
 }
@@ -438,6 +443,7 @@ func SecretsDefaults() SecretsConfig {
 		ACMEEnabled:       true,
 		ACMEDirectory:     letsEncrypt,
 		ACMEDir:           "/var/lib/bugnet-secrets/acme",
+		Telemetry:         telemetry.DefaultTable(),
 	}
 }
 
@@ -492,6 +498,7 @@ func (c *SecretsConfig) check() error {
 			}
 			return checkDir("acme_dir", c.ACMEDir)
 		},
+		c.Telemetry.Check,
 	}
 	for _, check := range checks {
 		if err := check(); err != nil {

@@ -28,6 +28,8 @@ import (
 	"github.com/bugnet-sh/bugnet-edges/internal/pace"
 	"github.com/bugnet-sh/bugnet-edges/internal/pages"
 	"github.com/bugnet-sh/bugnet-edges/internal/strangers"
+	"github.com/bugnet-sh/bugnet-edges/internal/telemetry"
+	"github.com/bugnet-sh/bugnet-edges/internal/telemetry/attr"
 	"github.com/bugnet-sh/bugnet-edges/internal/traffic"
 )
 
@@ -58,6 +60,8 @@ type Deps struct {
 	BoatSuffix    string           // previews.boat_host_suffix, the host Boat routes end in
 	// Transport reaches the providers' routes, DP 8.2.7's when nil
 	Transport http.RoundTripper
+	// Telemetry makes the route and repair spans, nil or off makes none
+	Telemetry *telemetry.Telemetry
 	Log       *slog.Logger
 }
 
@@ -98,7 +102,7 @@ func New(router routerv1connect.EdgeServiceClient, d Deps) http.Handler {
 	h := &handler{
 		router:   router,
 		d:        d,
-		cache:    newCache(router, d.Traffic, d.CacheSize, d.RouteTTL, d.BoatSuffix),
+		cache:    newCache(router, d.Traffic, d.CacheSize, d.RouteTTL, d.BoatSuffix, d.Telemetry),
 		limits:   newLimits(d.QueueWait, d.QueueMax, d.BoatPerMinute),
 		repaired: map[string]time.Time{},
 	}
@@ -227,7 +231,7 @@ func (h *handler) lookup(
 	case "BUDGET_SPENT":
 		return nil, pages.BudgetSpent, false
 	case "GATE_UNAVAILABLE":
-		h.repair(id, tok)
+		h.repair(nil, id, tok)
 		return nil, pages.GateDown, false
 	}
 	if errors.Is(err, errSpent) {
@@ -268,11 +272,22 @@ func (h *handler) serve(w http.ResponseWriter, r *http.Request, rt *route, tok, 
 	lane := h.d.Traffic.Pacer.Lane(rt.placement)
 	c := &call{
 		rt: rt, token: tok, host: host, ip: clientIP(r), lane: lane,
-		countIn: func(n int) { usage.Add(rt.placement, int64(n), 0) },
+		countIn: func(n int) {
+			usage.Add(rt.placement, int64(n), 0)
+			rt.trace.bytesIn.Add(int64(n))
+		},
 	}
-	out := func(n int) { usage.Add(rt.placement, 0, int64(n)) }
-	h.proxy.ServeHTTP(newMeter(w, lane, c.countIn, out),
-		r.WithContext(context.WithValue(ctx, callKey{}, c)))
+	out := func(n int) {
+		usage.Add(rt.placement, 0, int64(n))
+		rt.trace.bytesOut.Add(int64(n))
+	}
+	rt.trace.requests.Add(1)
+	m := newMeter(w, lane, c.countIn, out)
+	h.proxy.ServeHTTP(m, r.WithContext(context.WithValue(ctx, callKey{}, c)))
+	rt.trace.status(m.status)
+	if m.hijacked {
+		rt.trace.websockets.Add(1)
+	}
 }
 
 // proxyError answers a failed proxy call with the edge's page, asking for a repair when due
@@ -281,6 +296,7 @@ func (h *handler) proxyError(w http.ResponseWriter, r *http.Request, err error) 
 	var ge *gateError
 	switch {
 	case errors.As(err, &ge):
+		c.rt.trace.gateErrors.Add(1)
 		switch ge.value {
 		case portClosed:
 			pages.Write(w, pages.NothingOnPort(c.rt.port))
@@ -290,16 +306,19 @@ func (h *handler) proxyError(w http.ResponseWriter, r *http.Request, err error) 
 			pages.Write(w, pages.GateDown)
 		}
 	case errors.Is(err, errProvider):
-		h.repair(c.rt.id, c.token)
+		c.rt.trace.gateErrors.Add(1)
+		h.repair(c.rt, c.rt.id, c.token)
 		pages.Write(w, pages.GateDown)
 	case lease.Reason(r.Context()) != "":
 		pages.Write(w, byLease(lease.Reason(r.Context())))
 	case r.Context().Err() != nil:
 		// The visitor left, so nobody reads an answer
 	case errors.Is(err, syscall.ECONNREFUSED):
-		h.repair(c.rt.id, c.token)
+		c.rt.trace.gateErrors.Add(1)
+		h.repair(c.rt, c.rt.id, c.token)
 		pages.Write(w, pages.GateDown)
 	default:
+		c.rt.trace.gateErrors.Add(1)
 		h.d.Log.Debug("preview: the gate route failed", "preview", c.rt.id,
 			"placement", c.rt.placement, "err", errClass(err))
 		pages.Write(w, pages.GateDown)
@@ -337,8 +356,9 @@ func errClass(err error) string {
 	return "other"
 }
 
-// repair asks the router to repair a preview's gate, at most once a minute per preview
-func (h *handler) repair(id, tok string) {
+// repair asks the router to repair a preview's gate, at most once a minute per preview, under
+// the route's span when the caller holds the route
+func (h *handler) repair(rt *route, id, tok string) {
 	now := time.Now()
 	h.mu.Lock()
 	if last, ok := h.repaired[id]; ok && now.Sub(last) < repairEvery {
@@ -355,11 +375,14 @@ func (h *handler) repair(id, tok string) {
 	h.repaired[id] = now
 	h.mu.Unlock()
 	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), repairTimeout)
+		ctx, cancel := context.WithTimeout(rt.bg(), repairTimeout)
 		defer cancel()
+		ctx, span := telemetry.Child(ctx, h.d.Telemetry.Tracer(tracerScope), "edge.preview.repair")
 		_, err := h.router.RepairPreview(ctx, connect.NewRequest(&routerv1.RepairPreviewRequest{
 			PreviewId: id, Token: tok,
 		}))
+		span.SetAttributes(attr.Repaired(err == nil))
+		span.End()
 		if err != nil {
 			h.d.Log.Warn("preview: a repair failed", "preview", id,
 				"code", connect.CodeOf(err).String())

@@ -33,6 +33,7 @@ import (
 	"github.com/bugnet-sh/bugnet-edges/internal/lease"
 	"github.com/bugnet-sh/bugnet-edges/internal/routerclient"
 	"github.com/bugnet-sh/bugnet-edges/internal/strangers"
+	"github.com/bugnet-sh/bugnet-edges/internal/telemetry"
 	"github.com/bugnet-sh/bugnet-edges/internal/traffic"
 )
 
@@ -82,11 +83,19 @@ type harness struct {
 
 func newHarness(t *testing.T, change ...func(*Deps)) *harness {
 	t.Helper()
+	return newHarnessWith(t, telemetry.Off(), change...)
+}
+
+// newHarnessWith is newHarness with tel on the handler and on both router clients
+func newHarnessWith(t *testing.T, tel *telemetry.Telemetry, change ...func(*Deps)) *harness {
+	t.Helper()
 	f := newFakeRouter()
 	base := f.serve(t)
-	shared := routerv1connect.NewEdgeServiceClient(routerclient.New(base, edgeToken), base)
+	opts := routerclient.Options(tel)
+	shared := routerv1connect.NewEdgeServiceClient(routerclient.New(base, edgeToken), base, opts...)
 	newCall := func() routerv1connect.EdgeServiceClient {
-		return routerv1connect.NewEdgeServiceClient(routerclient.PerCall(base, edgeToken), base)
+		return routerv1connect.NewEdgeServiceClient(
+			routerclient.PerCall(base, edgeToken), base, opts...)
 	}
 	logs := &syncBuffer{}
 	log := slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
@@ -106,6 +115,7 @@ func newHarness(t *testing.T, change ...func(*Deps)) *harness {
 		Conns:       strangers.NewConns(16),
 		Chunk:       256 << 10,
 		IdleTimeout: time.Minute,
+		Telemetry:   tel,
 		Log:         log,
 	}
 	for _, c := range change {

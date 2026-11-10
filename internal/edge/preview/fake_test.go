@@ -66,6 +66,8 @@ type fakeRouter struct {
 	source       string
 	resolves     int
 	repairs      int
+	// orderTP is the order_traceparent every ResolvePreview answers
+	orderTP string
 	// resolveErr, when set, answers every ResolvePreview
 	resolveErr error
 	events     chan *routerv1.EdgeEvent
@@ -155,7 +157,8 @@ func (f *fakeRouter) ResolvePreview(
 		PlacementId: f.placement, Port: p.port, Upstream: f.upstream,
 		ExpiresAt: timestamppb.New(f.deadline), Generation: p.gen, Budget: b,
 		Interstitial: f.interstitial, SourceLabel: f.source,
-		StartedAt: timestamppb.New(time.Now().Add(-time.Minute)),
+		StartedAt:        timestamppb.New(time.Now().Add(-time.Minute)),
+		OrderTraceparent: f.orderTP,
 	}), nil
 }
 

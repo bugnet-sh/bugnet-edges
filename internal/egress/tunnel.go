@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"connectrpc.com/connect"
@@ -23,6 +24,7 @@ import (
 	"github.com/bugnet-sh/bugnet-edges/internal/hostname"
 	"github.com/bugnet-sh/bugnet-edges/internal/lease"
 	"github.com/bugnet-sh/bugnet-edges/internal/strangers"
+	"github.com/bugnet-sh/bugnet-edges/internal/telemetry/attr"
 )
 
 const (
@@ -100,6 +102,7 @@ func reasonOf(err error) string {
 
 // handleTunnel authenticates the upgrade, then carries the tunnel until it or its lease ends
 func (s *Server) handleTunnel(w http.ResponseWriter, r *http.Request) {
+	accepted := time.Now()
 	if !isUpgrade(r) {
 		http.NotFound(w, r)
 		return
@@ -136,7 +139,7 @@ func (s *Server) handleTunnel(w http.ResponseWriter, r *http.Request) {
 	ws.SetReadLimit(maxFrame)
 	s.m.tunnels.Add(1)
 	defer s.m.tunnels.Add(-1)
-	s.carry(p, ws, proxySourceOf(r))
+	s.carry(p, ws, proxySourceOf(r), accepted)
 }
 
 // admitSource judges a sandbox tunnel's source and answers 403 with no body when it is refused
@@ -274,9 +277,14 @@ func (s *Server) unknown(src netip.Addr, sum [32]byte, remember bool) denial {
 }
 
 // carry runs the inner TLS over the WebSocket and gives it to the shared server until it ends
-func (s *Server) carry(p *placement, ws *websocket.Conn, from netip.Addr) {
+func (s *Server) carry(p *placement, ws *websocket.Conn, from netip.Addr, accepted time.Time) {
 	ctx, cancel := p.lease.Child("tunnel")
 	defer cancel()
+	tt := &tunnelTrace{}
+	_, tt.span = s.tel.Session(ctx, p.view().resp.GetOrderTraceparent(), "egress.tunnel",
+		accepted, attr.PlacementID(p.id))
+	handshook := false
+	var tin, tout atomic.Int64
 	if !p.fetch {
 		defer p.track(from, cancel)()
 	}
@@ -287,15 +295,25 @@ func (s *Server) carry(p *placement, ws *websocket.Conn, from netip.Addr) {
 	}()
 	raw := wsNetConn(ctx, ws)
 	tc := newTunnelConn(raw, p.lane, time.Duration(s.cfg.TunnelIdleTimeout),
-		func(n int) { s.tr.Usage.Add(p.id, int64(n), 0); s.m.bytes.Add(uint64(n), "in") },
-		func(n int) { s.tr.Usage.Add(p.id, 0, int64(n)); s.m.bytes.Add(uint64(n), "out") })
+		&tt.idled,
+		func(n int) {
+			s.tr.Usage.Add(p.id, int64(n), 0)
+			s.m.bytes.Add(uint64(n), "in")
+			tin.Add(int64(n))
+		},
+		func(n int) {
+			s.tr.Usage.Add(p.id, 0, int64(n))
+			s.m.bytes.Add(uint64(n), "out")
+			tout.Add(int64(n))
+		})
 	defer func() { _ = tc.Close() }()
+	defer func() { tt.end(s.tunnelCause(ctx, tt, handshook), tin.Load(), tout.Load()) }()
 	stopClose := context.AfterFunc(ctx, func() { _ = tc.Close() })
 	defer stopClose()
 
 	inner := tls.Server(tc, &tls.Config{
 		MinVersion: tls.VersionTLS12, NextProtos: []string{"h2", "http/1.1"},
-		GetCertificate: s.innerCert(p),
+		GetCertificate: s.innerCert(p, tt),
 	})
 	hctx, hcancel := context.WithTimeout(ctx, time.Duration(s.cfg.HandshakeTimeout))
 	err := inner.HandshakeContext(hctx)
@@ -303,7 +321,11 @@ func (s *Server) carry(p *placement, ws *websocket.Conn, from netip.Addr) {
 	if err != nil {
 		return
 	}
-	s.conns.Store(inner, &connInfo{p: p, sni: normalHost(inner.ConnectionState().ServerName)})
+	sni := normalHost(inner.ConnectionState().ServerName)
+	handshook = true
+	label := hostLabel(p.view().hosts[sni], sni)
+	tt.host.Store(&label)
+	s.conns.Store(inner, &connInfo{p: p, sni: sni, trace: tt})
 	defer s.conns.Delete(inner)
 	if !s.innerLn.push(inner) {
 		return
@@ -317,15 +339,19 @@ func (s *Server) carry(p *placement, ws *websocket.Conn, from netip.Addr) {
 
 // connInfo is what the inner server learns about a tunnel's connection
 type connInfo struct {
-	p   *placement
-	sni string
+	p     *placement
+	sni   string
+	trace *tunnelTrace
 }
 
 // innerCert picks the certificate for the SNI the sandbox asked for, or fails the handshake
-func (s *Server) innerCert(p *placement) func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
+func (s *Server) innerCert(
+	p *placement, tt *tunnelTrace,
+) func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
 	return func(h *tls.ClientHelloInfo) (*tls.Certificate, error) {
 		name := normalHost(h.ServerName)
 		if err := s.checkSNI(p, name); err != nil {
+			tt.refused.Add(1)
 			s.m.refusedSNI.Inc()
 			if s.refusedSNI != nil {
 				s.refusedSNI(p.id, name)

@@ -76,7 +76,10 @@ func (s *Server) serveInner(w http.ResponseWriter, r *http.Request) {
 	st := &reqState{host: info.sni}
 	start := time.Now()
 	sw := &statusWriter{ResponseWriter: w, st: st}
-	defer func() { s.finish(p, r, st, start) }()
+	defer func() {
+		s.finish(p, r, st, start)
+		info.trace.note(st)
+	}()
 
 	// Host and SNI must agree, which stops domain fronting
 	if hostOf(r.Host) != info.sni {
@@ -134,6 +137,9 @@ func (s *Server) serveInner(w http.ResponseWriter, r *http.Request) {
 }
 
 func answer(w http.ResponseWriter, status int) {
+	if sw, ok := w.(*statusWriter); ok {
+		sw.st.refused = true
+	}
 	http.Error(w, http.StatusText(status), status)
 }
 

@@ -23,12 +23,16 @@ import (
 	"connectrpc.com/connect"
 	routerv1 "github.com/bugnet-sh/bugnet-proto/gen/go/bugnet/router/v1"
 	"github.com/bugnet-sh/bugnet-proto/gen/go/bugnet/router/v1/routerv1connect"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 	"google.golang.org/genproto/googleapis/rpc/errdetails"
 
 	"github.com/bugnet-sh/bugnet-edges/internal/lease"
 	"github.com/bugnet-sh/bugnet-edges/internal/pace"
 	"github.com/bugnet-sh/bugnet-edges/internal/pages"
 	"github.com/bugnet-sh/bugnet-edges/internal/strangers"
+	"github.com/bugnet-sh/bugnet-edges/internal/telemetry"
+	"github.com/bugnet-sh/bugnet-edges/internal/telemetry/attr"
 	"github.com/bugnet-sh/bugnet-edges/internal/traffic"
 )
 
@@ -59,7 +63,9 @@ type Deps struct {
 	Conns       *strangers.Conns // this route's own open connections per address
 	Chunk       int              // bytes in one message to the router
 	IdleTimeout time.Duration    // a transfer whose client moves nothing this long is cut
-	Log         *slog.Logger
+	// Telemetry makes the edge.transfer span, nil or off makes none
+	Telemetry *telemetry.Telemetry
+	Log       *slog.Logger
 }
 
 type handler struct {
@@ -105,6 +111,8 @@ type request struct {
 	status    int
 	bytes     int64
 	start     time.Time
+	span      trace.Span // edge.transfer, nil before the transfer opens
+	cause     string     // end_cause of the span, empty for the default
 }
 
 func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -159,6 +167,10 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	m := res.Msg
 	q.placement = m.GetPlacementId()
 	defer h.done(q)
+	_, q.span = h.d.Telemetry.Session(r.Context(), m.GetOrderTraceparent(), "edge.transfer",
+		q.start, attr.PlacementID(q.placement), attr.TransferHash(q.short),
+		attr.Direction(directionName(dir)))
+	defer h.endSpan(q)
 	if r.Method == http.MethodHead {
 		h.head(q, m)
 		return
@@ -171,6 +183,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}, b.GetBytesPerSecond())
 	ctx, stop := q.lease.Child(childKey)
 	defer stop()
+	ctx = trace.ContextWithSpan(ctx, q.span)
 	defer context.AfterFunc(r.Context(), stop)()
 	cancel := stop
 	// The lease follows the placement deadline and each extension, so only max_duration has a timer
@@ -219,13 +232,66 @@ func (h *handler) done(q *request) {
 
 func answer(q *request, c pages.Code) {
 	q.status = c.Status()
+	if q.cause == "" {
+		q.cause = causeOf(c)
+	}
 	pages.WriteJSON(q.w, c)
 }
 
 // abort cuts the client's connection, so a short body never looks complete
 func abort(q *request) {
 	q.status = 0
+	if q.cause == "" {
+		q.cause = "client_closed"
+	}
 	panic(http.ErrAbortHandler)
+}
+
+// causeOf is the end_cause an answer says, empty for one that says none
+func causeOf(c pages.Code) string {
+	switch c.Name() {
+	case pages.TooLong.Name():
+		return "deadline"
+	case pages.SandboxEnded.Name():
+		return "ended"
+	case pages.TrafficLimit.Name():
+		return "budget_spent"
+	}
+	return ""
+}
+
+func directionName(d routerv1.TransferDirection) string {
+	if d == routerv1.TransferDirection_TRANSFER_DIRECTION_UPLOAD {
+		return "upload"
+	}
+	return "download"
+}
+
+// endSpan ends the transfer's span with what the request moved and how it ended
+func (h *handler) endSpan(q *request) {
+	cause := q.cause
+	if cause == "" {
+		cause = "error"
+		if q.status >= 200 && q.status < 300 {
+			cause = "done"
+		}
+	}
+	q.span.SetAttributes(attr.SizeBytes(q.bytes), attr.EndCause(cause))
+	if q.status >= 100 && q.status <= 599 {
+		q.span.SetAttributes(attr.HTTPStatus(q.status))
+	}
+	if q.status >= 500 {
+		q.span.SetStatus(codes.Error, "HTTP_"+strconv.Itoa(q.status))
+	}
+	q.span.End()
+}
+
+// bg is a context for a call that outlives the request, holding the transfer's span
+func (q *request) bg() context.Context {
+	if q.span == nil {
+		return context.Background()
+	}
+	return trace.ContextWithSpan(context.Background(), q.span)
 }
 
 /* Downloads */
@@ -249,7 +315,7 @@ func (h *handler) download(ctx context.Context, q *request, m *routerv1.OpenTran
 		q.w.Header().Set("Content-Range", "bytes */"+strconv.FormatUint(m.GetSize(), 10))
 		answer(q, pages.Range)
 		_ = q.rc.Flush()
-		h.letGo(m)
+		h.letGo(q, m)
 		return
 	}
 	req := &routerv1.ReadTransferRequest{
@@ -338,7 +404,7 @@ func (h *handler) undelivered(
 
 // end tells the router whether the download reached the client, on a context of its own
 func (h *handler) end(q *request, m *routerv1.OpenTransferResponse, delivered bool) {
-	ctx, cancel := context.WithTimeout(context.Background(), letGoTimeout)
+	ctx, cancel := context.WithTimeout(q.bg(), letGoTimeout)
 	defer cancel()
 	_, err := h.newCall().EndTransfer(ctx, connect.NewRequest(&routerv1.EndTransferRequest{
 		TransferId: m.GetTransferId(), Lease: m.GetLease(), Delivered: delivered,
@@ -350,8 +416,8 @@ func (h *handler) end(q *request, m *routerv1.OpenTransferResponse, delivered bo
 }
 
 // letGo frees the claim a refused range took, with a read the router refuses as out of range
-func (h *handler) letGo(m *routerv1.OpenTransferResponse) {
-	ctx, cancel := context.WithTimeout(context.Background(), letGoTimeout)
+func (h *handler) letGo(q *request, m *routerv1.OpenTransferResponse) {
+	ctx, cancel := context.WithTimeout(q.bg(), letGoTimeout)
 	defer cancel()
 	stream, err := h.newCall().ReadTransfer(ctx, connect.NewRequest(&routerv1.ReadTransferRequest{
 		TransferId: m.GetTransferId(), Lease: m.GetLease(), Offset: m.GetSize() + 1,
@@ -463,7 +529,7 @@ func (h *handler) upload(
 ) {
 	size := m.GetSize()
 	if n := q.r.ContentLength; n >= 0 && uint64(n) != size {
-		h.letGoUpload(m)
+		h.letGoUpload(q, m)
 		if uint64(n) > size {
 			answer(q, pages.OverCap)
 		} else {
@@ -549,8 +615,8 @@ func (h *handler) upload(
 }
 
 // letGoUpload frees the claim of an upload refused before its body, with a write of another size
-func (h *handler) letGoUpload(m *routerv1.OpenTransferResponse) {
-	ctx, cancel := context.WithTimeout(context.Background(), letGoTimeout)
+func (h *handler) letGoUpload(q *request, m *routerv1.OpenTransferResponse) {
+	ctx, cancel := context.WithTimeout(q.bg(), letGoTimeout)
 	defer cancel()
 	first := &routerv1.WriteTransferRequest{TransferId: m.GetTransferId(), Lease: m.GetLease()}
 	// The router commits only the size, so a close after no bytes, or one byte for 0, is refused
@@ -645,6 +711,7 @@ func (x *idleWriter) Write(p []byte) (int, error) {
 // refusal is DP 8.6's answer to a router error, or to the reason the lease ended
 func (h *handler) refusal(ctx context.Context, q *request, err error) pages.Code {
 	if c, ok := ended(ctx); ok {
+		q.cause = endCause(ctx)
 		return c
 	}
 	switch reasonOf(err) {
@@ -719,6 +786,21 @@ func passed(q *request, slack time.Duration) (pages.Code, bool) {
 		return pages.SandboxEnded, true
 	}
 	return pages.Code{}, false
+}
+
+// endCause is the end_cause of a transfer its lease or hard stop ended
+func endCause(ctx context.Context) string {
+	switch lease.Reason(ctx) {
+	case lease.ReasonBudget:
+		return "budget_spent"
+	case lease.ReasonRevoked:
+		return "revoked"
+	case lease.ReasonExpired:
+		return "deadline"
+	case "":
+		return "deadline"
+	}
+	return "ended"
 }
 
 func byLease(reason string) pages.Code {

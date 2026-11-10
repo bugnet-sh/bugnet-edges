@@ -54,3 +54,13 @@ max_resends_per_payment = 3
 host_rate_floor_per_placement = 20   # a minute per placement and host, at most custom_host_requests_per_minute
 report_queue = 10000
 event_flush_interval = "2s"          # at most 2s
+
+[telemetry]
+traces = false              # export spans over OTLP, nothing is built or sent while false
+otlp_endpoint = ""          # the full traces URL, https, or http to a loopback host only
+sample_ratio = 1.0          # 0 to 1, share of new traces kept, the router and the gateway use the same
+environment = "main"        # deployment.environment.name on every span
+export_timeout = "10s"      # one export request
+batch_timeout = "5s"        # the longest a finished span waits before export
+batch_size = 512            # spans per export request, 1 to queue_size
+queue_size = 2048           # finished spans waiting for export, more are dropped

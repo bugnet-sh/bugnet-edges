@@ -18,6 +18,7 @@ import (
 
 	"github.com/bugnet-sh/bugnet-edges/internal/metrics"
 	"github.com/bugnet-sh/bugnet-edges/internal/settings"
+	"github.com/bugnet-sh/bugnet-edges/internal/telemetry"
 )
 
 // Config is bugnet-ssh's settings file (DP 9.8), its token and its host keys
@@ -39,11 +40,15 @@ type Config struct {
 	TotalBytesPerSecond        settings.Bytes    `toml:"total_bytes_per_second"`
 	// BannerFallback answers a refused lease in the first session instead of an auth banner
 	BannerFallback bool `toml:"banner_fallback"`
+	// Telemetry is the [telemetry] table
+	Telemetry telemetry.Table `toml:"telemetry"`
 
 	Token    string            `toml:"-"` // BUGNET_SSH_TOKEN
 	HostKeys []ssh.Signer      `toml:"-"`
 	Log      *slog.Logger      `toml:"-"`
 	Metrics  *metrics.Registry `toml:"-"`
+	// Tracing makes the ssh.connection and ssh.upstream spans, nil or off makes none
+	Tracing *telemetry.Telemetry `toml:"-"`
 }
 
 // Defaults is every setting at its default
@@ -63,6 +68,7 @@ func Defaults() Config {
 		AuthFailuresPerMinutePerIP: 20,
 		UsageReportInterval:        settings.Duration(5 * time.Second),
 		TotalBytesPerSecond:        16 << 20,
+		Telemetry:                  telemetry.DefaultTable(),
 	}
 }
 
@@ -156,7 +162,7 @@ func (c *Config) check() error {
 	if c.AcceptsPerMinutePerIP < 0 || c.AuthFailuresPerMinutePerIP < 0 {
 		return errors.New("the per-IP limits must be 0 or more, 0 is no limit")
 	}
-	return nil
+	return c.Telemetry.Check()
 }
 
 func checkAddr(key, addr string) error {

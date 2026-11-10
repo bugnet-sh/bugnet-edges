@@ -14,6 +14,7 @@ import (
 
 	"github.com/bugnet-sh/bugnet-edges/internal/hostname"
 	"github.com/bugnet-sh/bugnet-edges/internal/settings"
+	"github.com/bugnet-sh/bugnet-edges/internal/telemetry"
 	"github.com/bugnet-sh/bugnet-edges/internal/x402"
 )
 
@@ -64,7 +65,8 @@ type Config struct {
 	SourceRecheck               settings.Duration `toml:"source_recheck"`
 	UsageReportInterval         settings.Duration `toml:"usage_report_interval"`
 
-	X402 x402.Settings `toml:"x402"`
+	X402      x402.Settings   `toml:"x402"`
+	Telemetry telemetry.Table `toml:"telemetry"`
 
 	// localrunSettings is empty except in a localrun build
 	localrunSettings
@@ -106,6 +108,7 @@ func Defaults() Config {
 		SourceRecheck:               settings.Duration(10 * time.Second),
 		UsageReportInterval:         settings.Duration(5 * time.Second),
 		X402:                        x402.Defaults(),
+		Telemetry:                   telemetry.DefaultTable(),
 	}
 }
 
@@ -148,6 +151,7 @@ func (c *Config) check() error {
 	}
 	checks := []func() error{
 		c.checkX402,
+		c.Telemetry.Check,
 		func() error { return checkURL("router_url", c.RouterURL) },
 		func() error { return checkAddr("listen_addr", c.ListenAddr) },
 		func() error { return checkAddr("metrics_listen_addr", c.MetricsListenAddr) },

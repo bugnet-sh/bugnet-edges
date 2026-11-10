@@ -19,11 +19,12 @@ import (
 
 	"github.com/bugnet-sh/bugnet-edges/internal/egress"
 	"github.com/bugnet-sh/bugnet-edges/internal/routerclient"
+	"github.com/bugnet-sh/bugnet-edges/internal/telemetry"
 	"github.com/bugnet-sh/bugnet-edges/internal/x402"
 )
 
 func main() {
-	log := slog.New(slog.NewJSONHandler(os.Stderr, nil))
+	log := slog.New(telemetry.LogHandler(slog.NewJSONHandler(os.Stderr, nil)))
 	slog.SetDefault(log)
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, os.Interrupt)
 	defer stop()
@@ -84,8 +85,15 @@ func serve(
 	if err != nil {
 		return err
 	}
+	tel, err := telemetry.FromTable(cfg.Telemetry,
+		telemetry.Process{Service: "bugnet-egress", InstanceID: egress.ReporterID}, getenv, log)
+	if err != nil {
+		return err
+	}
+	// The flush runs after the proxy and its side loops have stopped
+	defer tel.Close()
 	router := routerv1connect.NewEgressServiceClient(
-		routerclient.New(cfg.RouterURL, cfg.Token), cfg.RouterURL)
+		routerclient.New(cfg.RouterURL, cfg.Token), cfg.RouterURL, routerclient.Options(tel)...)
 	events := x402.NewEvents(x402.EventsSend(router), time.Duration(cfg.X402.EventFlushInterval),
 		time.Now, log)
 	counters := x402.NewCounters()
@@ -98,7 +106,7 @@ func serve(
 	}
 	srv := egress.New(cfg, egress.Deps{
 		Router: router, Keys: keys, Minter: minter, Log: log, Events: events, Counters: counters,
-		Signer: signer,
+		Signer: signer, Telemetry: tel,
 		HostRate: x402.NewHostRate(cfg.CustomHostRequestsPerMinute,
 			cfg.X402.HostRateFloorPerPlacement, time.Now),
 	})

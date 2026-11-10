@@ -49,6 +49,9 @@ type conn struct {
 	dlTimer  *time.Timer
 	sessions map[*session]struct{}
 
+	// trace is the connection's ssh.connection span, once acquire has succeeded
+	trace connTrace
+
 	noMoreSessions atomic.Bool
 	sessionCount   atomic.Int32
 	forwardCount   atomic.Int32
@@ -58,7 +61,7 @@ type conn struct {
 func newConn(bg context.Context, g *Gateway, nc net.Conn, ip netip.Addr) *conn {
 	ctx, cancel := context.WithCancel(bg)
 	return &conn{
-		g: g, nc: nc, ip: ip, ctx: ctx, cancel: cancel,
+		g: g, nc: nc, ip: ip, ctx: ctx, cancel: cancel, trace: connTrace{accepted: time.Now()},
 		grants:   map[string]*routerv1.AuthorizeSshKeyResponse{},
 		sessions: map[*session]struct{}{},
 	}
@@ -94,6 +97,7 @@ func (c *conn) attach(
 ) {
 	c.placement, c.grantID, c.fingerprint = grant.GetPlacementId(), grant.GetGrantId(), fp
 	c.lease = res.GetLeaseId()
+	c.trace.begin(c.g.cfg.Tracing, grant.GetOrderTraceparent(), c.placement)
 	c.maxSessions = limit(int(grant.GetMaxSessions()), c.g.cfg.MaxSessionsPerConnection)
 	c.maxForwards = limit(int(grant.GetMaxForwards()), c.g.cfg.MaxForwardsPerConnection)
 	c.g.attach(c, res.GetBudget())
@@ -136,6 +140,7 @@ func (c *conn) run() {
 func (c *conn) close(reason string) {
 	c.closeOnce.Do(func() {
 		c.g.m.closes.Inc(reason)
+		defer c.trace.end(reason)
 		c.cancel()
 		c.stopTimers()
 		_ = c.nc.Close()
@@ -154,7 +159,7 @@ func (c *conn) close(reason string) {
 // release gives the lease back without waiting for the router
 func (c *conn) release() {
 	go func() {
-		ctx, cancel := context.WithTimeout(context.WithoutCancel(c.ctx), releaseTimeout)
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(c.traced()), releaseTimeout)
 		defer cancel()
 		_, err := c.g.router.ReleaseSshConnection(ctx,
 			connect.NewRequest(&routerv1.ReleaseSshConnectionRequest{
@@ -197,8 +202,10 @@ func (c *conn) counted(r io.Reader, in bool) io.Reader {
 	return c.lane.Reader(r, in, func(n int) {
 		if in {
 			c.g.rep.Add(c.placement, int64(n), 0)
+			c.trace.bytesIn.Add(int64(n))
 		} else {
 			c.g.rep.Add(c.placement, 0, int64(n))
+			c.trace.bytesOut.Add(int64(n))
 		}
 	})
 }

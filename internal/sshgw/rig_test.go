@@ -14,6 +14,7 @@ import (
 	routerv1 "github.com/bugnet-sh/bugnet-proto/gen/go/bugnet/router/v1"
 	"golang.org/x/crypto/ssh"
 
+	"github.com/bugnet-sh/bugnet-edges/internal/routerclient"
 	"github.com/bugnet-sh/bugnet-edges/internal/settings"
 )
 
@@ -70,7 +71,7 @@ func newRig(t *testing.T, mods ...func(*rig, *Config)) *rig {
 	for _, m := range mods {
 		m(r, &cfg)
 	}
-	r.gw = New(cfg, serveRouter(t, r.router))
+	r.gw = New(cfg, serveRouterWith(t, r.router, routerclient.Options(cfg.Tracing)...))
 	r.gw.checkEvery = time.Hour
 	for _, f := range r.tweaks {
 		f(r.gw)

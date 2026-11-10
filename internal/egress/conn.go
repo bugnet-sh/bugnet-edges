@@ -63,6 +63,8 @@ type tunnelConn struct {
 	w     io.Writer
 	idle  time.Duration
 	timer atomic.Pointer[time.Timer]
+	// idled is set when the idle timer closed the connection, when a trace wants to know
+	idled *atomic.Bool
 
 	done chan struct{}
 	once sync.Once
@@ -70,10 +72,13 @@ type tunnelConn struct {
 
 // newTunnelConn paces and counts raw through the placement's lane, in toward the sandbox
 func newTunnelConn(
-	raw net.Conn, lane *pace.Lane, idle time.Duration, in, out func(int),
+	raw net.Conn, lane *pace.Lane, idle time.Duration, idled *atomic.Bool, in, out func(int),
 ) *tunnelConn {
-	c := &tunnelConn{Conn: raw, idle: idle, done: make(chan struct{})}
-	c.timer.Store(time.AfterFunc(idle, func() { _ = c.Close() }))
+	c := &tunnelConn{Conn: raw, idle: idle, idled: idled, done: make(chan struct{})}
+	c.timer.Store(time.AfterFunc(idle, func() {
+		c.idled.Store(true)
+		_ = c.Close()
+	}))
 	c.r = lane.Reader(raw, false, func(n int) {
 		c.touch()
 		out(n)

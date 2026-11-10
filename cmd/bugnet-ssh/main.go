@@ -20,10 +20,11 @@ import (
 	"github.com/bugnet-sh/bugnet-edges/internal/reuseport"
 	"github.com/bugnet-sh/bugnet-edges/internal/routerclient"
 	"github.com/bugnet-sh/bugnet-edges/internal/sshgw"
+	"github.com/bugnet-sh/bugnet-edges/internal/telemetry"
 )
 
 func main() {
-	log := slog.New(slog.NewJSONHandler(os.Stderr, nil))
+	log := slog.New(telemetry.LogHandler(slog.NewJSONHandler(os.Stderr, nil)))
 	slog.SetDefault(log)
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, os.Interrupt)
 	defer stop()
@@ -55,8 +56,16 @@ func run(
 		return err
 	}
 	cfg.Log, cfg.Metrics = log, metrics.New()
+	tel, err := telemetry.FromTable(cfg.Telemetry,
+		telemetry.Process{Service: "bugnet-ssh", InstanceID: cfg.GatewayID}, getenv, log)
+	if err != nil {
+		return err
+	}
+	// The flush runs after the drain and every other shutdown step
+	defer tel.Close()
+	cfg.Tracing = tel
 	router := routerv1connect.NewSshGatewayServiceClient(
-		routerclient.New(cfg.RouterURL, cfg.Token), cfg.RouterURL)
+		routerclient.New(cfg.RouterURL, cfg.Token), cfg.RouterURL, routerclient.Options(tel)...)
 
 	ln, err := proxyproto.Listen(cfg.ListenAddr, cfg.ProxyProtocolFrom)
 	if err != nil {
