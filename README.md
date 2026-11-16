@@ -439,7 +439,8 @@ state of each name:
 ## bugnet-ssh
 
 `bugnet-ssh -config example/ssh.toml` is the SSH gateway of DP 9. It listens on 127.0.0.1:2223
-behind HAProxy's port 2222, PROXY v2 first. Its secret is `BUGNET_SSH_TOKEN`, and its host key is
+behind HAProxy's public port 2201, PROXY v2 first. Port 2222 is admin SSH, not this gateway. In
+production the router's `ssh.providers` is empty, so no sandbox is offered SSH. Its secret is `BUGNET_SSH_TOKEN`, and its host key is
 a systemd credential named in `host_key_credentials`. Metrics are on 9102.
 
 - The user name is the sandbox's alias. `checkKey` asks the router once for a key and caches the
