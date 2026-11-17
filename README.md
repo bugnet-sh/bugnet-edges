@@ -456,7 +456,7 @@ a systemd credential named in `host_key_credentials`. Metrics are on 9102.
 - Bytes count toward the edge budget through `ReportSshUsage` and follow the pace it answers.
 
 The real OpenSSH tests use the host's `ssh`, `sshd` and `scp` behind a `bugnet-run gate` built
-from `../bugnet-run`, and skip when one is missing. `BUGNET_TEST_SSH_GIB=1` moves 1 GiB each way
+from `../run`, and skip when one is missing. `BUGNET_TEST_SSH_GIB=1` moves 1 GiB each way
 in `TestOpenSSHBulkRate` instead of 64 MiB.
 
 ## bugnet-egress

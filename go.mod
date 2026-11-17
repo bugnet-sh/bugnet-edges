@@ -2,7 +2,7 @@ module github.com/bugnet-sh/bugnet-edges
 
 go 1.27
 
-replace github.com/bugnet-sh/bugnet-proto => ../bugnet-proto
+replace github.com/bugnet-sh/bugnet-proto => ../proto
 
 require (
 	connectrpc.com/connect v1.21.1

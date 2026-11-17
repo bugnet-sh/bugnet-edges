@@ -19,7 +19,7 @@ import (
 )
 
 // runnerDir is the bugnet-run checkout beside this one, in the workspace
-const runnerDir = "../../../bugnet-run"
+const runnerDir = "../../../run"
 
 // buildRunner builds bugnet-run from the workspace, skipping the test when it is not there
 func buildRunner(t *testing.T) string {

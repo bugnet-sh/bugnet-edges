@@ -82,7 +82,7 @@ PermitUserEnvironment no
 	// The gate, from the real runner, in a root of its own
 	runner := filepath.Join(dir, "bugnet-run")
 	build := exec.Command("go", "build", "-o", runner, "./cmd/bugnet-run")
-	build.Dir = filepath.Join("..", "..", "..", "bugnet-run")
+	build.Dir = filepath.Join("..", "..", "..", "run")
 	if out, err := build.CombinedOutput(); err != nil {
 		t.Skipf("cannot build bugnet-run: %v\n%s", err, out)
 	}

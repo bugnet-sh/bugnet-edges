@@ -21,11 +21,11 @@ jobs:
     defaults:
       run:
         shell: bash
-        working-directory: bugnet-edges
+        working-directory: edges
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          path: bugnet-edges
+          path: edges
           persist-credentials: false
 
       # Siblings use the branch of the same name, else the pull request's base, else main
@@ -59,26 +59,26 @@ jobs:
           echo "proto=$proto" >> "$GITHUB_OUTPUT"
           echo "run=$run" >> "$GITHUB_OUTPUT"
 
-      # go.mod replaces bugnet-proto with ../bugnet-proto
+      # go.mod replaces bugnet-proto with ../proto
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: bugnet-sh/bugnet-proto
           ref: ${{ steps.siblings.outputs.proto }}
-          path: bugnet-proto
+          path: proto
           persist-credentials: false
 
-      # The egress and sshgw tests build bugnet-run from ../bugnet-run and skip without it
+      # The egress and sshgw tests build bugnet-run from ../run and skip without it
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: bugnet-sh/bugnet-run
           ref: ${{ steps.siblings.outputs.run }}
-          path: bugnet-run
+          path: run
           persist-credentials: false
 
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: bugnet-edges/go.mod
-          cache-dependency-path: bugnet-edges/go.sum
+          cache-dependency-path: edges/go.sum
 
       - name: gofmt
         run: |
@@ -100,7 +100,7 @@ jobs:
         uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
           version: v2.14.0
-          working-directory: bugnet-edges
+          working-directory: edges
 
       - name: go test
         run: |

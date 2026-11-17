@@ -4,7 +4,7 @@ import { createHash, createPrivateKey, createPublicKey } from "node:crypto";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
-const payments = resolve(process.argv[2] ?? "../../../bugnet-payments");
+const payments = resolve(process.argv[2] ?? "../../../payments");
 const load = (path) => import(pathToFileURL(resolve(payments, path)).href);
 const { buildSellerPayment, signSellerPayment } = await load("src/x402/build.ts");
 const { usdcAta } = await load("src/solana/accounts.ts");

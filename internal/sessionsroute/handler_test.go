@@ -629,7 +629,7 @@ func TestRouterCallsHaveADeadline(t *testing.T) {
 }
 
 func TestTheSessionPageBuildLoads(t *testing.T) {
-	dist := "../../../bugnet-website/packages/session-page/dist"
+	dist := "../../../website/packages/session-page/dist"
 	if _, err := os.Stat(filepath.Join(dist, "headers.txt")); err != nil {
 		t.Skip("no session page build beside this checkout")
 	}

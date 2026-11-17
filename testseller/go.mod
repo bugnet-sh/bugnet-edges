@@ -4,7 +4,7 @@ go 1.27.3
 
 replace (
 	github.com/bugnet-sh/bugnet-edges => ../
-	github.com/bugnet-sh/bugnet-proto => ../../bugnet-proto
+	github.com/bugnet-sh/bugnet-proto => ../../proto
 )
 
 require (
